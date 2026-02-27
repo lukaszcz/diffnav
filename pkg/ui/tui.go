@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"strings"
@@ -76,6 +77,8 @@ type mainModel struct {
 	sideBySide        bool
 	help              help.Model
 	helpOpen          bool
+	themeOverride     *bool
+	isDarkBackground  *bool
 }
 
 func New(input string, cfg config.Config) mainModel {
@@ -83,9 +86,22 @@ func New(input string, cfg config.Config) mainModel {
 		input: input, isShowingFileTree: cfg.UI.ShowFileTree,
 		activePanel: FileTreePanel, config: cfg, iconStyle: cfg.UI.Icons, sideBySide: cfg.UI.SideBySide,
 	}
+	switch config.ResolveTheme(cfg.UI.Theme) {
+	case config.ThemeLight:
+		isDark := false
+		m.themeOverride = &isDark
+		m.isDarkBackground = &isDark
+	case config.ThemeDark:
+		isDark := true
+		m.themeOverride = &isDark
+		m.isDarkBackground = &isDark
+	}
 	m.fileTree = filetree.New(cfg)
+	if m.isDarkBackground != nil {
+		m.fileTree.SetDarkBackground(*m.isDarkBackground)
+	}
 	m.fileTree.SetSize(cfg.UI.FileTreeWidth, 0)
-	m.diffViewer = diffviewer.New(cfg.UI.SideBySide)
+	m.diffViewer = diffviewer.New(cfg.UI.SideBySide, config.ResolveTheme(cfg.UI.Theme))
 	m.help = help.New()
 	m.help.SetKeys(KeyGroups())
 
@@ -218,6 +234,18 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileTree.SetSize(tWidth, tHeight)
 		m.search.SetWidth(tWidth)
 
+	case tea.BackgroundColorMsg:
+		if m.themeOverride != nil {
+			break
+		}
+		isDark := msg.IsDark()
+		m.isDarkBackground = &isDark
+		m.fileTree.SetDarkBackground(isDark)
+		dfCmd := m.diffViewer.SetDarkBackground(msg.IsDark())
+		if dfCmd != nil {
+			cmds = append(cmds, dfCmd)
+		}
+
 	case fileTreeMsg:
 		m.files = msg.files
 		if len(m.files) == 0 {
@@ -285,6 +313,7 @@ func (m mainModel) searchUpdate(msg tea.Msg) (mainModel, []tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 	if m.search.Focused() {
+		skipSearchUpdate := false
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
@@ -292,13 +321,18 @@ func (m mainModel) searchUpdate(msg tea.Msg) (mainModel, []tea.Cmd) {
 				m.stopSearch()
 				dfCmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight())
 				cmds = append(cmds, dfCmd)
+				skipSearchUpdate = true
 			case "ctrl+c":
 				return m, []tea.Cmd{tea.Quit}
 			case "enter":
+				skipSearchUpdate = true
 				m.stopSearch()
 				dfCmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight())
 				cmds = append(cmds, dfCmd)
 
+				if len(m.filtered) == 0 {
+					return m, cmds
+				}
 				selected := m.filtered[m.resultsCursor]
 				for _, f := range m.files {
 					if filenode.GetFileName(f) == selected {
@@ -319,9 +353,11 @@ func (m mainModel) searchUpdate(msg tea.Msg) (mainModel, []tea.Cmd) {
 				m.resultsCursor = 0
 			}
 		}
-		s, sc := m.search.Update(msg)
-		cmds = append(cmds, sc)
-		m.search = s
+		if !skipSearchUpdate {
+			s, sc := m.search.Update(msg)
+			cmds = append(cmds, sc)
+			m.search = s
+		}
 		m.setSearchResults()
 		m.resultsVp.SetContent(m.resultsView())
 	}
@@ -459,11 +495,20 @@ func (m mainModel) fetchFileTree() tea.Msg {
 }
 
 func (m mainModel) footerView() string {
-	base := lipgloss.NewStyle().Background(common.Colors[common.DarkerSelected])
+	var baseBg color.Color = common.SelectionColor(common.DarkerSelected, m.isDarkBackground)
+	var sepColor color.Color = lipgloss.BrightBlack
+	var helpBg color.Color = lipgloss.BrightBlack
+	var helpFg color.Color = lipgloss.NoColor{}
+	if m.isDarkBackground != nil && !*m.isDarkBackground {
+		sepColor = lipgloss.Color("#64748B")
+		helpBg = lipgloss.Color("#C7D2DE")
+		helpFg = lipgloss.Color("#334155")
+	}
+	base := lipgloss.NewStyle().Background(baseBg)
 	files := fmt.Sprintf(" %d files", len(m.files))
-	sep := lipgloss.NewStyle().Foreground(lipgloss.BrightBlack).Render(" • ")
+	sep := lipgloss.NewStyle().Foreground(sepColor).Render(" • ")
 	added, deleted := m.diffViewer.RootDiffStats()
-	help := base.Background(lipgloss.BrightBlack).PaddingLeft(1).PaddingRight(1).Render("? help")
+	help := base.Background(helpBg).Foreground(helpFg).PaddingLeft(1).PaddingRight(1).Render("? help")
 	stats := filenode.ViewDiffStats(added, deleted, base)
 	spacing := base.Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(stats)-
 		lipgloss.Width(help)-lipgloss.Width(files)-lipgloss.Width(sep))))
@@ -478,9 +523,16 @@ func (m mainModel) resultsView() string {
 	for i, f := range m.filtered {
 		fName := utils.TruncateString(" "+f, m.config.UI.SearchTreeWidth-2)
 		if i == m.resultsCursor {
+			selectedBg := color.Color(lipgloss.Color("#1b1b33"))
+			selectedFg := color.Color(lipgloss.NoColor{})
+			if m.isDarkBackground != nil && !*m.isDarkBackground {
+				selectedBg = common.SelectionColor(common.Selected, m.isDarkBackground)
+				selectedFg = lipgloss.Color("#334155")
+			}
 			sb.WriteString(
 				lipgloss.NewStyle().
-					Background(lipgloss.Color("#1b1b33")).
+					Background(selectedBg).
+					Foreground(selectedFg).
 					Bold(true).
 					Render(fName) +
 					"\n",
