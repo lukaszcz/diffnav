@@ -2,6 +2,7 @@ package diffviewer
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/dlvhdr/diffnav/pkg/config"
 	"github.com/dlvhdr/diffnav/pkg/filenode"
 	"github.com/dlvhdr/diffnav/pkg/icons"
 	"github.com/dlvhdr/diffnav/pkg/ui/common"
@@ -45,6 +47,9 @@ type Model struct {
 	cache      nodeCache
 	sideBySide bool
 	preamble   string
+	themeMode  themeMode
+	// nil means unknown (leave delta behavior unchanged).
+	isDarkBackground *bool
 }
 
 // SetPreamble stores the preamble text (e.g. commit metadata from git show).
@@ -52,12 +57,30 @@ func (m *Model) SetPreamble(preamble string) {
 	m.preamble = preamble
 }
 
-func New(sideBySide bool) Model {
-	return Model{
+type themeMode uint8
+
+const (
+	themeAuto themeMode = iota
+	themeLight
+	themeDark
+)
+
+func New(sideBySide bool, theme string) Model {
+	m := Model{
 		vp:         viewport.Model{},
 		sideBySide: sideBySide,
 		cache:      map[string]*cachedNode{},
+		themeMode:  parseThemeMode(theme),
 	}
+	switch m.themeMode {
+	case themeLight:
+		isDark := false
+		m.isDarkBackground = &isDark
+	case themeDark:
+		isDark := true
+		m.isDarkBackground = &isDark
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -126,7 +149,7 @@ func (m *Model) diff() tea.Cmd {
 		}
 		m.file = node
 		m.cache[key] = node
-		return diffFile(node, m.Width, m.sideBySide)
+		return diffFile(node, m.Width, m.sideBySide, m.deltaThemeArgs())
 	} else if m.dir != nil {
 		key := cacheKey(m.dir.path, m.sideBySide)
 		if cached, ok := m.cache[key]; ok && cached.diff != "" {
@@ -146,7 +169,14 @@ func (m *Model) diff() tea.Cmd {
 		if m.dir.path == "/" {
 			preamble = m.preamble
 		}
-		return diffDir(node, m.Width, m.sideBySide, preamble)
+		return diffDir(
+			node,
+			m.Width,
+			m.sideBySide,
+			m.deltaThemeArgs(),
+			common.SelectionColor(common.Selected, m.isDarkBackground),
+			preamble,
+		)
 	}
 
 	return nil
@@ -217,7 +247,7 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 	}
 	m.cache[key] = m.file
 
-	return m, diffFile(m.file, m.Width, m.sideBySide)
+	return m, diffFile(m.file, m.Width, m.sideBySide, m.deltaThemeArgs())
 }
 
 func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cmd) {
@@ -247,7 +277,14 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 	if dirPath == "/" {
 		preamble = m.preamble
 	}
-	return m, diffDir(m.dir, m.Width, m.sideBySide, preamble)
+	return m, diffDir(
+		m.dir,
+		m.Width,
+		m.sideBySide,
+		m.deltaThemeArgs(),
+		common.SelectionColor(common.Selected, m.isDarkBackground),
+		preamble,
+	)
 }
 
 func (m *Model) GoToTop() {
@@ -270,7 +307,7 @@ func (m *Model) ScrollDown(lines int) {
 	m.vp.ScrollDown(lines)
 }
 
-func diffFile(node *cachedNode, width int, sideBySide bool) tea.Cmd {
+func diffFile(node *cachedNode, width int, sideBySide bool, themeArgs []string) tea.Cmd {
 	if width == 0 || node == nil || len(node.files) != 1 {
 		return nil
 	}
@@ -285,6 +322,7 @@ func diffFile(node *cachedNode, width int, sideBySide bool) tea.Cmd {
 			fmt.Sprintf("-w=%d", width),
 			fmt.Sprintf("--max-line-length=%d", width),
 		}
+		args = append(args, themeArgs...)
 		if useSideBySide {
 			args = append(args, "--side-by-side")
 		}
@@ -299,14 +337,21 @@ func diffFile(node *cachedNode, width int, sideBySide bool) tea.Cmd {
 	}
 }
 
-func diffDir(dir *cachedNode, width int, sideBySide bool, preamble string) tea.Cmd {
+func diffDir(
+	dir *cachedNode,
+	width int,
+	sideBySide bool,
+	themeArgs []string,
+	selectedBg color.Color,
+	preamble string,
+) tea.Cmd {
 	if width == 0 || dir == nil {
 		return nil
 	}
 	key := cacheKey(dir.path, sideBySide)
 	return func() tea.Msg {
-		s := common.BgStyles[common.Selected]
-		c := common.LipglossColorToHex(common.Colors[common.Selected])
+		s := lipgloss.NewStyle().Background(selectedBg)
+		c := common.LipglossColorToHex(selectedBg)
 		useSideBySide := sideBySide
 		args := []string{
 			"--paging=never",
@@ -321,6 +366,7 @@ func diffDir(dir *cachedNode, width int, sideBySide bool, preamble string) tea.C
 			fmt.Sprintf("-w=%d", width),
 			fmt.Sprintf("--max-line-length=%d", width),
 		}
+		args = append(args, themeArgs...)
 		if useSideBySide {
 			args = append(args, "--side-by-side")
 		}
@@ -371,6 +417,55 @@ func renderPreamble(preamble string) string {
 	}
 
 	return strings.Join(out, "\n")
+}
+
+func (m *Model) SetDarkBackground(isDark bool) tea.Cmd {
+	if m.themeMode != themeAuto {
+		return nil
+	}
+	if m.isDarkBackground != nil && *m.isDarkBackground == isDark {
+		return nil
+	}
+	m.isDarkBackground = &isDark
+	m.cache = make(nodeCache)
+	return m.diff()
+}
+
+func (m Model) deltaThemeArgs() []string {
+	if m.isDarkBackground == nil || *m.isDarkBackground {
+		return nil
+	}
+
+	// Light terminals: force high-contrast readable content in side-by-side mode.
+	return []string{
+		"--light",
+		"--syntax-theme=Monokai Extended Light",
+		"--zero-style=syntax",
+		"--line-numbers-left-style=normal",
+		"--line-numbers-right-style=normal",
+		"--line-numbers-zero-style=normal",
+		"--line-numbers-minus-style=red \"#ffebe9\"",
+		"--line-numbers-plus-style=green \"#dafbe1\"",
+		"--minus-style=syntax \"#ffebe9\"",
+		"--plus-style=syntax \"#dafbe1\"",
+		"--minus-non-emph-style=syntax \"#ffebe9\"",
+		"--plus-non-emph-style=syntax \"#dafbe1\"",
+		"--minus-emph-style=syntax bold \"#ffd8d3\"",
+		"--plus-emph-style=syntax bold \"#b9f6ca\"",
+	}
+}
+
+func parseThemeMode(v string) themeMode {
+	switch config.NormalizeTheme(v) {
+	case config.ThemeAuto:
+		return themeAuto
+	case config.ThemeLight:
+		return themeLight
+	case config.ThemeDark:
+		return themeDark
+	default:
+		return themeAuto
+	}
 }
 
 type diffContentMsg struct {
