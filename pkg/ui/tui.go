@@ -124,7 +124,13 @@ func New(input string, cfg config.Config) mainModel {
 }
 
 func (m mainModel) Init() tea.Cmd {
-	return tea.Batch(m.fetchFileTree, m.diffViewer.Init())
+	cmds := []tea.Cmd{m.fetchFileTree, m.diffViewer.Init()}
+	if m.themeOverride == nil {
+		cmds = append(cmds, func() tea.Msg {
+			return tea.RequestBackgroundColor()
+		})
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

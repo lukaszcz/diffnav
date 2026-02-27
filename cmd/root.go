@@ -173,11 +173,19 @@ func init() {
 			cfg.UI.SideBySide = true
 		}
 
-		ttyIn, _, err := tea.OpenTTY()
+		ttyIn, ttyOut, err := tea.OpenTTY()
 		if err != nil {
 			log.Fatal(err)
 		}
-		p := tea.NewProgram(ui.New(input, cfg), tea.WithInput(ttyIn))
+		defer func() {
+			if err := ttyIn.Close(); err != nil {
+				log.Fatal(err)
+			}
+			if err := ttyOut.Close(); err != nil {
+				log.Fatal(err)
+			}
+		}()
+		p := tea.NewProgram(ui.New(input, cfg), tea.WithInput(ttyIn), tea.WithOutput(ttyOut))
 
 		if _, err := p.Run(); err != nil {
 			log.Fatal(err)
