@@ -88,6 +88,42 @@ func TestHiddenTreeSearchEnterThenToggleDoesNotPanic(t *testing.T) {
 	_ = m.View().Content
 }
 
+func TestHiddenTreeSearchClickNearLeftEdgeDoesNotShowFileTree(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.isShowingFileTree = false
+	m.searching = true
+
+	updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if result.isShowingFileTree {
+		t.Fatal("expected left-edge click during hidden-tree search to leave the file tree hidden")
+	}
+}
+
+func TestHiddenSidebarGrabStillShowsFileTreeWhenNotSearching(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.isShowingFileTree = false
+	m.searching = false
+
+	updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if !result.isShowingFileTree {
+		t.Fatal("expected left-edge click on the hidden sidebar grab line to show the file tree")
+	}
+}
+
 func newTestMainModel(t *testing.T) mainModel {
 	t.Helper()
 	zone.NewGlobal()

@@ -568,7 +568,7 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Allow grabbing the line when sidebar is hidden.
-			if !m.isShowingFileTree && msg.X <= sidebarGrabThreshold {
+			if !m.isSidebarVisible() && msg.X <= sidebarGrabThreshold {
 				m.draggingSidebar = true
 				m.isShowingFileTree = true
 				return m, nil
