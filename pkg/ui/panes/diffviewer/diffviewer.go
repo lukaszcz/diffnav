@@ -45,6 +45,8 @@ type Model struct {
 	file       *cachedNode
 	dir        *cachedNode
 	cache      nodeCache
+	// Monotonic render generation used to drop stale async results.
+	renderID   uint64
 	sideBySide bool
 	themeMode  themeMode
 	// nil means unknown (leave delta behavior unchanged).
@@ -97,6 +99,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 	case diffContentMsg:
+		if msg.renderID != m.renderID {
+			break
+		}
 		// Truncate lines to viewport width to prevent ANSI escape overflow.
 		lines := strings.Split(msg.text, "\n")
 		for i, line := range lines {
@@ -128,6 +133,10 @@ func (m *Model) SetSize(width, height int) tea.Cmd {
 }
 
 func (m *Model) diff() tea.Cmd {
+	if m.themeMode == themeAuto && m.isDarkBackground == nil {
+		return nil
+	}
+
 	if m.file != nil {
 		key := cacheKey(m.file.path, m.sideBySide)
 		if cached, ok := m.cache[key]; ok && cached.diff != "" {
@@ -143,7 +152,8 @@ func (m *Model) diff() tea.Cmd {
 		}
 		m.file = node
 		m.cache[key] = node
-		return diffFile(node, m.Width, m.sideBySide, m.deltaThemeArgs())
+		m.renderID++
+		return diffFile(node, m.Width, m.sideBySide, m.deltaThemeArgs(), m.renderID)
 	} else if m.dir != nil {
 		key := cacheKey(m.dir.path, m.sideBySide)
 		if cached, ok := m.cache[key]; ok && cached.diff != "" {
@@ -159,12 +169,14 @@ func (m *Model) diff() tea.Cmd {
 		}
 		m.dir = node
 		m.cache[key] = node
+		m.renderID++
 		return diffDir(
 			node,
 			m.Width,
 			m.sideBySide,
 			m.deltaThemeArgs(),
 			common.SelectionColor(common.Selected, m.isDarkBackground),
+			m.renderID,
 		)
 	}
 
@@ -236,7 +248,8 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 	}
 	m.cache[key] = m.file
 
-	return m, diffFile(m.file, m.Width, m.sideBySide, m.deltaThemeArgs())
+	cmd := m.diff()
+	return m, cmd
 }
 
 func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cmd) {
@@ -262,13 +275,8 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 		deletions: deleted,
 	}
 	m.cache[key] = m.dir
-	return m, diffDir(
-		m.dir,
-		m.Width,
-		m.sideBySide,
-		m.deltaThemeArgs(),
-		common.SelectionColor(common.Selected, m.isDarkBackground),
-	)
+	cmd := m.diff()
+	return m, cmd
 }
 
 func (m *Model) GoToTop() {
@@ -291,7 +299,13 @@ func (m *Model) ScrollDown(lines int) {
 	m.vp.ScrollDown(lines)
 }
 
-func diffFile(node *cachedNode, width int, sideBySide bool, themeArgs []string) tea.Cmd {
+func diffFile(
+	node *cachedNode,
+	width int,
+	sideBySide bool,
+	themeArgs []string,
+	renderID uint64,
+) tea.Cmd {
 	if width == 0 || node == nil || len(node.files) != 1 {
 		return nil
 	}
@@ -317,7 +331,7 @@ func diffFile(node *cachedNode, width int, sideBySide bool, themeArgs []string) 
 		if err != nil {
 			return common.ErrMsg{Err: err}
 		}
-		return diffContentMsg{cacheKey: key, text: string(out)}
+		return diffContentMsg{cacheKey: key, text: string(out), renderID: renderID}
 	}
 }
 
@@ -327,6 +341,7 @@ func diffDir(
 	sideBySide bool,
 	themeArgs []string,
 	selectedBg color.Color,
+	renderID uint64,
 ) tea.Cmd {
 	if width == 0 || dir == nil {
 		return nil
@@ -365,7 +380,7 @@ func diffDir(
 			return common.ErrMsg{Err: err}
 		}
 
-		return diffContentMsg{cacheKey: key, text: string(out)}
+		return diffContentMsg{cacheKey: key, text: string(out), renderID: renderID}
 	}
 }
 
@@ -421,6 +436,7 @@ func parseThemeMode(v string) themeMode {
 type diffContentMsg struct {
 	cacheKey string
 	text     string
+	renderID uint64
 }
 
 func (m *Model) RootDiffStats() (int64, int64) {
