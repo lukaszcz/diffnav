@@ -66,6 +66,7 @@ func TestUpdateIgnoresStaleDiffContentMsg(t *testing.T) {
 	m := New(false, "auto")
 	m.vp.SetWidth(120)
 	key := cacheKey("/", false)
+	m.dir = &cachedNode{path: "/"}
 	m.cache[key] = &cachedNode{}
 	m.renderID = 2
 
@@ -84,6 +85,7 @@ func TestUpdateAcceptsCurrentDiffContentMsg(t *testing.T) {
 	m := New(false, "auto")
 	m.vp.SetWidth(120)
 	key := cacheKey("/", false)
+	m.dir = &cachedNode{path: "/"}
 	m.cache[key] = &cachedNode{}
 	m.renderID = 3
 
@@ -95,5 +97,29 @@ func TestUpdateAcceptsCurrentDiffContentMsg(t *testing.T) {
 
 	if updated.cache[key].diff != "fresh" {
 		t.Fatalf("expected current render to be applied, got %q", updated.cache[key].diff)
+	}
+}
+
+func TestUpdateIgnoresDiffContentMsgForInactiveCacheKey(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(120)
+	activeKey := cacheKey("/", false)
+	staleKey := cacheKey("other.txt", false)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[activeKey] = &cachedNode{}
+	m.cache[staleKey] = &cachedNode{}
+	m.renderID = 4
+
+	updated, _ := m.Update(diffContentMsg{
+		cacheKey: staleKey,
+		text:     "stale",
+		renderID: 4,
+	})
+
+	if updated.cache[staleKey].diff != "" {
+		t.Fatalf("expected inactive cache key render to be ignored, got %q", updated.cache[staleKey].diff)
+	}
+	if got := updated.vp.View(); strings.Contains(got, "stale") {
+		t.Fatalf("expected viewport content to remain unchanged, got %q", got)
 	}
 }

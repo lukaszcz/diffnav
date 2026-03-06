@@ -105,7 +105,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 	case diffContentMsg:
-		if msg.renderID != m.renderID {
+		if msg.renderID != m.renderID || msg.cacheKey != m.activeCacheKey() {
 			break
 		}
 		// Truncate lines to viewport width to prevent ANSI escape overflow.
@@ -439,6 +439,16 @@ func (m *Model) SetDarkBackground(isDark bool) tea.Cmd {
 	m.isDarkBackground = &isDark
 	m.cache = make(nodeCache)
 	return m.diff()
+}
+
+func (m Model) activeCacheKey() string {
+	if m.file != nil {
+		return cacheKey(m.file.path, m.sideBySide)
+	}
+	if m.dir != nil {
+		return cacheKey(m.dir.path, m.sideBySide)
+	}
+	return ""
 }
 
 func (m Model) deltaThemeArgs() []string {
