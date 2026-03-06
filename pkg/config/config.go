@@ -4,8 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	ThemeAuto  = "auto"
+	ThemeLight = "light"
+	ThemeDark  = "dark"
 )
 
 type UIConfig struct {
@@ -18,6 +25,7 @@ type UIConfig struct {
 	ColorFileNames  bool   `yaml:"colorFileNames"` // Color filenames by git status (default: true)
 	ShowDiffStats   bool   `yaml:"showDiffStats"`  // Show the amount of lines added / removed next to the file
 	SideBySide      bool   `yaml:"sideBySide"`     // Side-by-side diff view (default: true)
+	Theme           string `yaml:"theme"`          // "auto" (default), "light", "dark"
 }
 
 type Config struct {
@@ -36,8 +44,29 @@ func DefaultConfig() Config {
 			ColorFileNames:  true,
 			SideBySide:      true,
 			ShowDiffStats:   true,
+			Theme:           ThemeAuto,
 		},
 	}
+}
+
+func NormalizeTheme(theme string) string {
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "", ThemeAuto:
+		return ThemeAuto
+	case ThemeLight:
+		return ThemeLight
+	case ThemeDark:
+		return ThemeDark
+	default:
+		return ThemeAuto
+	}
+}
+
+func ResolveTheme(configTheme string) string {
+	if envTheme := os.Getenv("DIFFNAV_THEME"); envTheme != "" {
+		return NormalizeTheme(envTheme)
+	}
+	return NormalizeTheme(configTheme)
 }
 
 func getConfigFilePath() string {

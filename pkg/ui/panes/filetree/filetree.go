@@ -23,9 +23,10 @@ import (
 )
 
 type Model struct {
-	t     tree.Model
-	files []*gitdiff.File
-	cfg   config.Config
+	t                tree.Model
+	files            []*gitdiff.File
+	cfg              config.Config
+	isDarkBackground *bool
 }
 
 func New(cfg config.Config) Model {
@@ -84,7 +85,7 @@ func getDirIcons(iconStyle string) (string, string) {
 }
 
 func (m *Model) updateStyles() {
-	dimmed := common.Colors[common.Selected]
+	dimmed := common.SelectionColor(common.Selected, m.isDarkBackground)
 	base := lipgloss.NewStyle()
 	m.t.SetStyles(tree.Styles{
 		TreeStyle:       base,
@@ -110,6 +111,14 @@ func (m *Model) updateStyles() {
 	open, closed := getDirIcons(m.cfg.UI.Icons)
 	m.t.SetOpenCharacter(open)
 	m.t.SetClosedCharacter(closed)
+}
+
+func (m *Model) SetDarkBackground(isDark bool) {
+	if m.isDarkBackground != nil && *m.isDarkBackground == isDark {
+		return
+	}
+	m.isDarkBackground = &isDark
+	m.updateStyles()
 }
 
 func (m Model) SetFiles(files []*gitdiff.File) Model {

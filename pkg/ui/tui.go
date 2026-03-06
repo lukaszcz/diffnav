@@ -2,9 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -47,6 +49,8 @@ const (
 
 	// Scroll speed in lines per wheel tick.
 	scrollLines = 3
+
+	themeDetectTimeout = 100 * time.Millisecond
 )
 
 type Panel int
@@ -76,16 +80,33 @@ type mainModel struct {
 	sideBySide        bool
 	help              help.Model
 	helpOpen          bool
+	themeOverride     *bool
+	isDarkBackground  *bool
 }
+
+type themeDetectTimeoutMsg struct{}
 
 func New(input string, cfg config.Config) mainModel {
 	m := mainModel{
 		input: input, isShowingFileTree: cfg.UI.ShowFileTree,
 		activePanel: FileTreePanel, config: cfg, iconStyle: cfg.UI.Icons, sideBySide: cfg.UI.SideBySide,
 	}
+	switch config.ResolveTheme(cfg.UI.Theme) {
+	case config.ThemeLight:
+		isDark := false
+		m.themeOverride = &isDark
+		m.isDarkBackground = &isDark
+	case config.ThemeDark:
+		isDark := true
+		m.themeOverride = &isDark
+		m.isDarkBackground = &isDark
+	}
 	m.fileTree = filetree.New(cfg)
+	if m.isDarkBackground != nil {
+		m.fileTree.SetDarkBackground(*m.isDarkBackground)
+	}
 	m.fileTree.SetSize(cfg.UI.FileTreeWidth, 0)
-	m.diffViewer = diffviewer.New(cfg.UI.SideBySide)
+	m.diffViewer = diffviewer.New(cfg.UI.SideBySide, config.ResolveTheme(cfg.UI.Theme))
 	m.help = help.New()
 	m.help.SetKeys(KeyGroups())
 
@@ -108,7 +129,16 @@ func New(input string, cfg config.Config) mainModel {
 }
 
 func (m mainModel) Init() tea.Cmd {
-	return tea.Batch(m.fetchFileTree, m.diffViewer.Init())
+	cmds := []tea.Cmd{m.fetchFileTree, m.diffViewer.Init()}
+	if m.themeOverride == nil {
+		cmds = append(cmds, func() tea.Msg {
+			return tea.RequestBackgroundColor()
+		})
+		cmds = append(cmds, tea.Tick(themeDetectTimeout, func(_ time.Time) tea.Msg {
+			return themeDetectTimeoutMsg{}
+		}))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -120,11 +150,20 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 	}
 
+	// Theme autodetection must work regardless of the current interaction mode.
+	if dfCmd := m.applyAutoDetectedBackground(msg); dfCmd != nil {
+		cmds = append(cmds, dfCmd)
+	}
+
 	if m.searching {
 		var sCmds []tea.Cmd
 		m, sCmds = m.searchUpdate(msg)
 		cmds = append(cmds, sCmds...)
-		return m, tea.Batch(cmds...)
+
+		switch msg.(type) {
+		case tea.KeyMsg, tea.PasteMsg:
+			return m, tea.Batch(cmds...)
+		}
 	}
 
 	switch msg := msg.(type) {
@@ -259,6 +298,31 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *mainModel) applyAutoDetectedBackground(msg tea.Msg) tea.Cmd {
+	if m.themeOverride != nil {
+		return nil
+	}
+
+	var isDark bool
+
+	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		isDark = msg.IsDark()
+	case themeDetectTimeoutMsg:
+		// Deterministic fallback if terminal doesn't respond quickly enough.
+		if m.isDarkBackground != nil {
+			return nil
+		}
+		isDark = true
+	default:
+		return nil
+	}
+
+	m.isDarkBackground = &isDark
+	m.fileTree.SetDarkBackground(isDark)
+	return m.diffViewer.SetDarkBackground(isDark)
 }
 
 func (m *mainModel) mainContentHeight() int {
@@ -467,11 +531,21 @@ func (m mainModel) fetchFileTree() tea.Msg {
 }
 
 func (m mainModel) footerView() string {
-	base := lipgloss.NewStyle().Background(common.Colors[common.DarkerSelected])
+	baseBg := common.SelectionColor(common.DarkerSelected, m.isDarkBackground)
+	sepColor := color.Color(lipgloss.BrightBlack)
+	helpBg := color.Color(lipgloss.BrightBlack)
+	helpFg := color.Color(lipgloss.NoColor{})
+	if m.isDarkBackground != nil && !*m.isDarkBackground {
+		sepColor = lipgloss.Color("#64748B")
+		helpBg = lipgloss.Color("#C7D2DE")
+		helpFg = lipgloss.Color("#334155")
+	}
+	base := lipgloss.NewStyle().Background(baseBg)
+	helpStyle := base.Background(helpBg).Foreground(helpFg).PaddingLeft(1).PaddingRight(1)
 	files := fmt.Sprintf(" %d files", len(m.files))
-	sep := lipgloss.NewStyle().Foreground(lipgloss.BrightBlack).Render(" • ")
+	sep := lipgloss.NewStyle().Foreground(sepColor).Render(" • ")
 	added, deleted := m.diffViewer.RootDiffStats()
-	help := base.Background(lipgloss.BrightBlack).PaddingLeft(1).PaddingRight(1).Render("? help")
+	help := helpStyle.Render("? help")
 	stats := filenode.ViewDiffStats(added, deleted, base)
 	spacing := base.Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(stats)-
 		lipgloss.Width(help)-lipgloss.Width(files)-lipgloss.Width(sep))))
@@ -486,9 +560,16 @@ func (m mainModel) resultsView() string {
 	for i, f := range m.filtered {
 		fName := utils.TruncateString(" "+f, m.config.UI.SearchTreeWidth-2)
 		if i == m.resultsCursor {
+			selectedBg := color.Color(lipgloss.Color("#1b1b33"))
+			selectedFg := color.Color(lipgloss.NoColor{})
+			if m.isDarkBackground != nil && !*m.isDarkBackground {
+				selectedBg = common.SelectionColor(common.Selected, m.isDarkBackground)
+				selectedFg = lipgloss.Color("#334155")
+			}
 			sb.WriteString(
 				lipgloss.NewStyle().
-					Background(lipgloss.Color("#1b1b33")).
+					Background(selectedBg).
+					Foreground(selectedFg).
 					Bold(true).
 					Render(fName) +
 					"\n",

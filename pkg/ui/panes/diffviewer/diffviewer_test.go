@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -28,7 +29,6 @@ Date:   Mon Jan 1 00:00:00 2026 +0000
 	got := renderPreamble(preamble)
 	plain := ansi.Strip(got)
 
-	// All original content lines should be preserved in the output.
 	for _, want := range []string{
 		"commit abc123def456",
 		"Author: Jane Doe <jane@example.com>",
@@ -60,5 +60,110 @@ Date:   Mon Jan 1 00:00:00 2026 +0000
 		if !strings.Contains(plain, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, plain)
 		}
+	}
+}
+
+func TestUpdateIgnoresStaleDiffContentMsg(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(120)
+	key := cacheKey("/", false)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[key] = &cachedNode{}
+	m.renderID = 2
+
+	updated, _ := m.Update(diffContentMsg{
+		cacheKey: key,
+		text:     "stale",
+		renderID: 1,
+	})
+
+	if updated.cache[key].diff != "" {
+		t.Fatalf("expected stale render to be ignored, got %q", updated.cache[key].diff)
+	}
+}
+
+func TestUpdateAcceptsCurrentDiffContentMsg(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(120)
+	key := cacheKey("/", false)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[key] = &cachedNode{}
+	m.renderID = 3
+
+	updated, _ := m.Update(diffContentMsg{
+		cacheKey: key,
+		text:     "fresh",
+		renderID: 3,
+	})
+
+	if updated.cache[key].diff != "fresh" {
+		t.Fatalf("expected current render to be applied, got %q", updated.cache[key].diff)
+	}
+}
+
+func TestUpdateIgnoresDiffContentMsgForInactiveCacheKey(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(120)
+	activeKey := cacheKey("/", false)
+	staleKey := cacheKey("other.txt", false)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[activeKey] = &cachedNode{}
+	m.cache[staleKey] = &cachedNode{}
+	m.renderID = 4
+
+	updated, _ := m.Update(diffContentMsg{
+		cacheKey: staleKey,
+		text:     "stale",
+		renderID: 4,
+	})
+
+	if updated.cache[staleKey].diff != "" {
+		t.Fatalf("expected inactive cache key render to be ignored, got %q", updated.cache[staleKey].diff)
+	}
+	if got := updated.vp.View(); strings.Contains(got, "stale") {
+		t.Fatalf("expected viewport content to remain unchanged, got %q", got)
+	}
+}
+
+func TestSetFilePatchRerendersPendingCachedEntry(t *testing.T) {
+	m := New(false, "dark")
+	m.Width = 120
+	m.vp.SetWidth(120)
+	file := &gitdiff.File{NewName: "pending.txt"}
+	key := cacheKey("pending.txt", false)
+	pending := &cachedNode{path: "pending.txt"}
+	m.cache[key] = pending
+
+	updated, cmd := m.SetFilePatch(file)
+
+	if updated.file == pending {
+		t.Fatal("expected pending cache entry to be replaced before rendering")
+	}
+	if cmd == nil {
+		t.Fatal("expected rerender command for pending cache entry")
+	}
+	if updated.cache[key] == pending {
+		t.Fatal("expected cache entry to be replaced before rendering")
+	}
+}
+
+func TestSetDirPatchRerendersPendingCachedEntry(t *testing.T) {
+	m := New(false, "dark")
+	m.Width = 120
+	m.vp.SetWidth(120)
+	key := cacheKey("dir", false)
+	pending := &cachedNode{path: "dir"}
+	m.cache[key] = pending
+
+	updated, cmd := m.SetDirPatch("dir", []*gitdiff.File{{NewName: "dir/file.txt"}})
+
+	if updated.dir == pending {
+		t.Fatal("expected pending cache entry to be replaced before rendering")
+	}
+	if cmd == nil {
+		t.Fatal("expected rerender command for pending cache entry")
+	}
+	if updated.cache[key] == pending {
+		t.Fatal("expected cache entry to be replaced before rendering")
 	}
 }

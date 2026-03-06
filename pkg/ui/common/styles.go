@@ -25,6 +25,21 @@ var BgStyles = map[Key]lipgloss.Style{
 	DarkerSelected: lipgloss.NewStyle().Background(Colors[DarkerSelected]),
 }
 
+func SelectionColor(key Key, isDarkBackground *bool) color.Color {
+	if isDarkBackground == nil || *isDarkBackground {
+		return Colors[key]
+	}
+
+	switch key {
+	case Selected:
+		return lipgloss.Color("#E7ECF3")
+	case DarkerSelected:
+		return lipgloss.Color("#D5DEE8")
+	default:
+		return Colors[key]
+	}
+}
+
 // lipglossColorToHex converts a color.Color to hex string
 func LipglossColorToHex(c color.Color) string {
 	r, g, b, _ := c.RGBA()

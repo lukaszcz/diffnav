@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -173,11 +174,29 @@ func init() {
 			cfg.UI.SideBySide = true
 		}
 
-		ttyIn, _, err := tea.OpenTTY()
+		ttyIn, ttyOut, err := tea.OpenTTY()
 		if err != nil {
 			log.Fatal(err)
 		}
-		p := tea.NewProgram(ui.New(input, cfg), tea.WithInput(ttyIn))
+		defer func() {
+			var closeErr error
+			if ttyOut == ttyIn {
+				if err := ttyIn.Close(); err != nil {
+					closeErr = errors.Join(closeErr, fmt.Errorf("close tty: %w", err))
+				}
+			} else {
+				if err := ttyIn.Close(); err != nil {
+					closeErr = errors.Join(closeErr, fmt.Errorf("close tty input: %w", err))
+				}
+				if err := ttyOut.Close(); err != nil {
+					closeErr = errors.Join(closeErr, fmt.Errorf("close tty output: %w", err))
+				}
+			}
+			if closeErr != nil {
+				log.Printf("tty cleanup error: %v", closeErr)
+			}
+		}()
+		p := tea.NewProgram(ui.New(input, cfg), tea.WithInput(ttyIn), tea.WithOutput(ttyOut))
 
 		if _, err := p.Run(); err != nil {
 			log.Fatal(err)
