@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"os"
 	"strings"
 	"testing"
@@ -171,6 +172,56 @@ func TestSearchSidebarDragMotionIsIgnored(t *testing.T) {
 	}
 	if result.fileTree.Width() != m.fileTree.Width() {
 		t.Fatalf("expected file tree width to remain %d, got %d", m.fileTree.Width(), result.fileTree.Width())
+	}
+}
+
+func TestBackgroundColorDetectionStillWorksWhileSearching(t *testing.T) {
+	m := newTestMainModel(t)
+	m.searching = true
+	m.search.Focus()
+	m.themeOverride = nil
+	m.isDarkBackground = nil
+
+	updated := updateMainModel(t, m, tea.BackgroundColorMsg{
+		Color: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+	})
+
+	if updated.isDarkBackground == nil {
+		t.Fatal("expected background color detection to set theme state while searching")
+	}
+	if *updated.isDarkBackground {
+		t.Fatal("expected light background detection while searching")
+	}
+}
+
+func TestThemeDetectionTimeoutFallsBackToDark(t *testing.T) {
+	m := newTestMainModel(t)
+	m.themeOverride = nil
+	m.isDarkBackground = nil
+
+	updated := updateMainModel(t, m, themeDetectTimeoutMsg{})
+	if updated.isDarkBackground == nil {
+		t.Fatal("expected timeout to resolve theme state")
+	}
+	if !*updated.isDarkBackground {
+		t.Fatal("expected timeout fallback to dark background")
+	}
+}
+
+func TestLateBackgroundDetectionIgnoredAfterTimeout(t *testing.T) {
+	m := newTestMainModel(t)
+	m.themeOverride = nil
+	m.isDarkBackground = nil
+	m = updateMainModel(t, m, themeDetectTimeoutMsg{})
+
+	updated := updateMainModel(t, m, tea.BackgroundColorMsg{
+		Color: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+	})
+	if updated.isDarkBackground == nil {
+		t.Fatal("expected theme state to remain resolved")
+	}
+	if !*updated.isDarkBackground {
+		t.Fatal("expected late background message to be ignored after timeout")
 	}
 }
 

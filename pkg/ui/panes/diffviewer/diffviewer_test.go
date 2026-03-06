@@ -28,7 +28,6 @@ Date:   Mon Jan 1 00:00:00 2026 +0000
 	got := renderPreamble(preamble)
 	plain := ansi.Strip(got)
 
-	// All original content lines should be preserved in the output.
 	for _, want := range []string{
 		"commit abc123def456",
 		"Author: Jane Doe <jane@example.com>",
@@ -60,5 +59,41 @@ Date:   Mon Jan 1 00:00:00 2026 +0000
 		if !strings.Contains(plain, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, plain)
 		}
+	}
+}
+
+func TestUpdateIgnoresStaleDiffContentMsg(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(120)
+	key := cacheKey("/", false)
+	m.cache[key] = &cachedNode{}
+	m.renderID = 2
+
+	updated, _ := m.Update(diffContentMsg{
+		cacheKey: key,
+		text:     "stale",
+		renderID: 1,
+	})
+
+	if updated.cache[key].diff != "" {
+		t.Fatalf("expected stale render to be ignored, got %q", updated.cache[key].diff)
+	}
+}
+
+func TestUpdateAcceptsCurrentDiffContentMsg(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(120)
+	key := cacheKey("/", false)
+	m.cache[key] = &cachedNode{}
+	m.renderID = 3
+
+	updated, _ := m.Update(diffContentMsg{
+		cacheKey: key,
+		text:     "fresh",
+		renderID: 3,
+	})
+
+	if updated.cache[key].diff != "fresh" {
+		t.Fatalf("expected current render to be applied, got %q", updated.cache[key].diff)
 	}
 }

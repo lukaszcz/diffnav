@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -48,6 +49,8 @@ const (
 
 	// Scroll speed in lines per wheel tick.
 	scrollLines = 3
+
+	themeDetectTimeout = 100 * time.Millisecond
 )
 
 type Panel int
@@ -80,6 +83,8 @@ type mainModel struct {
 	themeOverride     *bool
 	isDarkBackground  *bool
 }
+
+type themeDetectTimeoutMsg struct{}
 
 func New(input string, cfg config.Config) mainModel {
 	m := mainModel{
@@ -129,6 +134,9 @@ func (m mainModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return tea.RequestBackgroundColor()
 		})
+		cmds = append(cmds, tea.Tick(themeDetectTimeout, func(_ time.Time) tea.Msg {
+			return themeDetectTimeoutMsg{}
+		}))
 	}
 	return tea.Batch(cmds...)
 }
@@ -140,6 +148,13 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle mouse events regardless of search mode
 	if msg, ok := msg.(tea.MouseMsg); ok {
 		return m.handleMouse(msg)
+	}
+
+	// Theme autodetection must work regardless of the current interaction mode.
+	if isDark, ok := autoDetectedBackground(msg); ok {
+		if dfCmd := m.applyAutoDetectedBackground(isDark); dfCmd != nil {
+			cmds = append(cmds, dfCmd)
+		}
 	}
 
 	if m.searching {
@@ -241,18 +256,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileTree.SetSize(tWidth, tHeight)
 		m.search.SetWidth(m.searchWidth())
 
-	case tea.BackgroundColorMsg:
-		if m.themeOverride != nil {
-			break
-		}
-		isDark := msg.IsDark()
-		m.isDarkBackground = &isDark
-		m.fileTree.SetDarkBackground(isDark)
-		dfCmd := m.diffViewer.SetDarkBackground(msg.IsDark())
-		if dfCmd != nil {
-			cmds = append(cmds, dfCmd)
-		}
-
 	case fileTreeMsg:
 		m.files = msg.files
 		if len(m.files) == 0 {
@@ -293,6 +296,27 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *mainModel) applyAutoDetectedBackground(isDark bool) tea.Cmd {
+	if m.themeOverride != nil || m.isDarkBackground != nil {
+		return nil
+	}
+	m.isDarkBackground = &isDark
+	m.fileTree.SetDarkBackground(isDark)
+	return m.diffViewer.SetDarkBackground(isDark)
+}
+
+func autoDetectedBackground(msg tea.Msg) (bool, bool) {
+	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		return msg.IsDark(), true
+	case themeDetectTimeoutMsg:
+		// Deterministic fallback if terminal doesn't respond quickly enough.
+		return true, true
+	default:
+		return false, false
+	}
 }
 
 func (m *mainModel) mainContentHeight() int {
