@@ -27,8 +27,36 @@ func TestSearchUpdateEnterWithNoResultsDoesNotPanic(t *testing.T) {
 	if updated.searching {
 		t.Fatal("expected search to stop after pressing enter")
 	}
+	if updated.search.Focused() {
+		t.Fatal("expected search input to blur after pressing enter")
+	}
+	if updated.search.Value() != "" {
+		t.Fatalf("expected search input to clear after pressing enter, got %q", updated.search.Value())
+	}
 	if updated.resultsCursor != 0 {
 		t.Fatalf("expected cursor to remain at 0, got %d", updated.resultsCursor)
+	}
+}
+
+func TestSearchUpdateEscClearsAndBlursSearch(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.searching = true
+	m.search.Focus()
+	m.search.SetValue("query")
+	m.setSearchResults()
+
+	updated, _ := m.searchUpdate(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+
+	if updated.searching {
+		t.Fatal("expected search to stop after pressing escape")
+	}
+	if updated.search.Focused() {
+		t.Fatal("expected search input to blur after pressing escape")
+	}
+	if updated.search.Value() != "" {
+		t.Fatalf("expected search input to clear after pressing escape, got %q", updated.search.Value())
 	}
 }
 

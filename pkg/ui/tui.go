@@ -347,7 +347,6 @@ func (m mainModel) searchUpdate(msg tea.Msg) (mainModel, []tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 	if m.search.Focused() {
-		skipSearchUpdate := false
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
@@ -355,11 +354,9 @@ func (m mainModel) searchUpdate(msg tea.Msg) (mainModel, []tea.Cmd) {
 				m.stopSearch()
 				dfCmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight())
 				cmds = append(cmds, dfCmd)
-				skipSearchUpdate = true
 			case "ctrl+c":
 				return m, []tea.Cmd{tea.Quit}
 			case "enter":
-				skipSearchUpdate = true
 				m.stopSearch()
 				dfCmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight())
 				cmds = append(cmds, dfCmd)
@@ -389,11 +386,9 @@ func (m mainModel) searchUpdate(msg tea.Msg) (mainModel, []tea.Cmd) {
 				m.resultsCursor = 0
 			}
 		}
-		if !skipSearchUpdate {
-			s, sc := m.search.Update(msg)
-			cmds = append(cmds, sc)
-			m.search = s
-		}
+		s, sc := m.search.Update(msg)
+		cmds = append(cmds, sc)
+		m.search = s
 		m.setSearchResults()
 		m.resultsVp.SetContent(m.resultsView())
 	}
