@@ -242,7 +242,7 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 
 	fname := filenode.GetFileName(file)
 	key := cacheKey(fname, m.sideBySide)
-	if cached, ok := m.cache[key]; ok {
+	if cached, ok := m.cache[key]; ok && cached.diff != "" {
 		m.file = cached
 		m.vp.SetContent(cached.diff)
 		return m, nil
@@ -267,7 +267,7 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 	m.file = nil
 
 	key := cacheKey(dirPath, m.sideBySide)
-	if cached, ok := m.cache[key]; ok {
+	if cached, ok := m.cache[key]; ok && cached.diff != "" {
 		m.dir = cached
 		m.vp.SetContent(cached.diff)
 		return m, nil
