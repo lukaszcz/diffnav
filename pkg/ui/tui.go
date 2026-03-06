@@ -151,10 +151,8 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Theme autodetection must work regardless of the current interaction mode.
-	if isDark, ok := autoDetectedBackground(msg); ok {
-		if dfCmd := m.applyAutoDetectedBackground(isDark); dfCmd != nil {
-			cmds = append(cmds, dfCmd)
-		}
+	if dfCmd := m.applyAutoDetectedBackground(msg); dfCmd != nil {
+		cmds = append(cmds, dfCmd)
 	}
 
 	if m.searching {
@@ -298,25 +296,29 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *mainModel) applyAutoDetectedBackground(isDark bool) tea.Cmd {
-	if m.themeOverride != nil || m.isDarkBackground != nil {
+func (m *mainModel) applyAutoDetectedBackground(msg tea.Msg) tea.Cmd {
+	if m.themeOverride != nil {
 		return nil
 	}
+
+	var isDark bool
+
+	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		isDark = msg.IsDark()
+	case themeDetectTimeoutMsg:
+		// Deterministic fallback if terminal doesn't respond quickly enough.
+		if m.isDarkBackground != nil {
+			return nil
+		}
+		isDark = true
+	default:
+		return nil
+	}
+
 	m.isDarkBackground = &isDark
 	m.fileTree.SetDarkBackground(isDark)
 	return m.diffViewer.SetDarkBackground(isDark)
-}
-
-func autoDetectedBackground(msg tea.Msg) (bool, bool) {
-	switch msg := msg.(type) {
-	case tea.BackgroundColorMsg:
-		return msg.IsDark(), true
-	case themeDetectTimeoutMsg:
-		// Deterministic fallback if terminal doesn't respond quickly enough.
-		return true, true
-	default:
-		return false, false
-	}
 }
 
 func (m *mainModel) mainContentHeight() int {

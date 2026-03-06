@@ -208,7 +208,7 @@ func TestThemeDetectionTimeoutFallsBackToDark(t *testing.T) {
 	}
 }
 
-func TestLateBackgroundDetectionIgnoredAfterTimeout(t *testing.T) {
+func TestLateBackgroundDetectionOverridesTimeoutFallback(t *testing.T) {
 	m := newTestMainModel(t)
 	m.themeOverride = nil
 	m.isDarkBackground = nil
@@ -220,8 +220,8 @@ func TestLateBackgroundDetectionIgnoredAfterTimeout(t *testing.T) {
 	if updated.isDarkBackground == nil {
 		t.Fatal("expected theme state to remain resolved")
 	}
-	if !*updated.isDarkBackground {
-		t.Fatal("expected late background message to be ignored after timeout")
+	if *updated.isDarkBackground {
+		t.Fatal("expected late background message to replace the timeout fallback")
 	}
 }
 
