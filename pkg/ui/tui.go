@@ -641,7 +641,7 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button == tea.MouseLeft {
 			// Keep coordinate check for resize border (hybrid approach).
 			sidebarWidth := m.sidebarWidth()
-			if m.isShowingFileTree && abs(msg.X-sidebarWidth) <= sidebarGrabThreshold {
+			if !m.searching && m.isShowingFileTree && abs(msg.X-sidebarWidth) <= sidebarGrabThreshold {
 				m.draggingSidebar = true
 				return m, nil
 			}
@@ -779,6 +779,11 @@ func (m mainModel) handleScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m mainModel) handleSidebarDrag(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		m.draggingSidebar = false
+		return m, nil
+	}
+
 	// Hide sidebar if dragged below threshold.
 	if msg.Mouse().X < sidebarHideWidth {
 		m.isShowingFileTree = false

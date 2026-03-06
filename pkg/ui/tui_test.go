@@ -125,6 +125,56 @@ func TestHiddenSidebarGrabStillShowsFileTreeWhenNotSearching(t *testing.T) {
 	}
 }
 
+func TestSearchSidebarBorderClickDoesNotStartDragging(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.isShowingFileTree = true
+	m.searching = true
+	m.fileTree.SetSize(m.config.UI.FileTreeWidth, m.mainContentHeight()-searchHeight)
+
+	updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{
+		X:      m.sidebarWidth(),
+		Y:      1,
+		Button: tea.MouseLeft,
+	}))
+
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if result.draggingSidebar {
+		t.Fatal("expected sidebar dragging to stay disabled while searching")
+	}
+}
+
+func TestSearchSidebarDragMotionIsIgnored(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.isShowingFileTree = true
+	m.searching = true
+	m.draggingSidebar = true
+	m.fileTree.SetSize(m.config.UI.FileTreeWidth, m.mainContentHeight()-searchHeight)
+
+	updated, _ := m.handleMouse(tea.MouseMotionMsg(tea.Mouse{
+		X:      40,
+		Y:      1,
+		Button: tea.MouseLeft,
+	}))
+
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if result.draggingSidebar {
+		t.Fatal("expected search-mode drag motion to clear dragging state")
+	}
+	if result.fileTree.Width() != m.fileTree.Width() {
+		t.Fatalf("expected file tree width to remain %d, got %d", m.fileTree.Width(), result.fileTree.Width())
+	}
+}
+
 func TestBackgroundColorDetectionStillWorksWhileSearching(t *testing.T) {
 	m := newTestMainModel(t)
 	m.searching = true
