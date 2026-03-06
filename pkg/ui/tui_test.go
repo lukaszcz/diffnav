@@ -203,6 +203,33 @@ func TestSearchSidebarDragMotionIsIgnored(t *testing.T) {
 	}
 }
 
+func TestWindowResizeStillUpdatesLayoutWhileSearching(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.searching = true
+	m.search.Focus()
+	m.search.SetWidth(m.searchWidth())
+	m.diffViewer.Width = 10
+	m.diffViewer.Height = 10
+
+	updated := updateMainModel(t, m, tea.WindowSizeMsg{Width: 132, Height: 48})
+
+	if updated.width != 132 || updated.height != 48 {
+		t.Fatalf("expected window size to update to 132x48, got %dx%d", updated.width, updated.height)
+	}
+	if updated.search.Width() != updated.searchWidth() {
+		t.Fatalf("expected search width to update to %d, got %d", updated.searchWidth(), updated.search.Width())
+	}
+	wantDiffWidth := 132 - updated.sidebarWidth()
+	if updated.diffViewer.Width != wantDiffWidth {
+		t.Fatalf("expected diff viewer width to update to %d, got %d", wantDiffWidth, updated.diffViewer.Width)
+	}
+	if updated.diffViewer.Height != updated.mainContentHeight() {
+		t.Fatalf("expected diff viewer height to update to %d, got %d", updated.mainContentHeight(), updated.diffViewer.Height)
+	}
+}
+
 func TestBackgroundColorDetectionStillWorksWhileSearching(t *testing.T) {
 	m := newTestMainModel(t)
 	m.searching = true
