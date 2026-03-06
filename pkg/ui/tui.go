@@ -532,20 +532,21 @@ func (m mainModel) fetchFileTree() tea.Msg {
 }
 
 func (m mainModel) footerView() string {
-	var baseBg color.Color = common.SelectionColor(common.DarkerSelected, m.isDarkBackground)
-	var sepColor color.Color = lipgloss.BrightBlack
-	var helpBg color.Color = lipgloss.BrightBlack
-	var helpFg color.Color = lipgloss.NoColor{}
+	baseBg := common.SelectionColor(common.DarkerSelected, m.isDarkBackground)
+	sepColor := color.Color(lipgloss.BrightBlack)
+	helpBg := color.Color(lipgloss.BrightBlack)
+	helpFg := color.Color(lipgloss.NoColor{})
 	if m.isDarkBackground != nil && !*m.isDarkBackground {
 		sepColor = lipgloss.Color("#64748B")
 		helpBg = lipgloss.Color("#C7D2DE")
 		helpFg = lipgloss.Color("#334155")
 	}
 	base := lipgloss.NewStyle().Background(baseBg)
+	helpStyle := base.Background(helpBg).Foreground(helpFg).PaddingLeft(1).PaddingRight(1)
 	files := fmt.Sprintf(" %d files", len(m.files))
 	sep := lipgloss.NewStyle().Foreground(sepColor).Render(" • ")
 	added, deleted := m.diffViewer.RootDiffStats()
-	help := base.Background(helpBg).Foreground(helpFg).PaddingLeft(1).PaddingRight(1).Render("? help")
+	help := helpStyle.Render("? help")
 	stats := filenode.ViewDiffStats(added, deleted, base)
 	spacing := base.Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(stats)-
 		lipgloss.Width(help)-lipgloss.Width(files)-lipgloss.Width(sep))))
