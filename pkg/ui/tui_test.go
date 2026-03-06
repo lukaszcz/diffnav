@@ -230,6 +230,22 @@ func TestWindowResizeStillUpdatesLayoutWhileSearching(t *testing.T) {
 	}
 }
 
+func TestPasteStillUpdatesSearchInputWhileSearching(t *testing.T) {
+	m := newTestMainModel(t)
+	m.searching = true
+	m.search.Focus()
+	m.setSearchResults()
+
+	updated := updateMainModel(t, m, tea.PasteMsg{Content: "yarn"})
+
+	if got := updated.search.Value(); got != "yarn" {
+		t.Fatalf("expected pasted search value %q, got %q", "yarn", got)
+	}
+	if len(updated.filtered) != 1 || updated.filtered[0] != "yarn.lock" {
+		t.Fatalf("expected pasted search value to narrow results to yarn.lock, got %#v", updated.filtered)
+	}
+}
+
 func TestBackgroundColorDetectionStillWorksWhileSearching(t *testing.T) {
 	m := newTestMainModel(t)
 	m.searching = true

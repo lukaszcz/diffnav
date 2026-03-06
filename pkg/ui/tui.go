@@ -156,10 +156,12 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.searching {
-		if _, ok := msg.(tea.KeyMsg); ok {
-			var sCmds []tea.Cmd
-			m, sCmds = m.searchUpdate(msg)
-			cmds = append(cmds, sCmds...)
+		var sCmds []tea.Cmd
+		m, sCmds = m.searchUpdate(msg)
+		cmds = append(cmds, sCmds...)
+
+		switch msg.(type) {
+		case tea.KeyMsg, tea.PasteMsg:
 			return m, tea.Batch(cmds...)
 		}
 	}
