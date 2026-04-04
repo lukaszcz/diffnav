@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -93,6 +94,7 @@ type mainModel struct {
 	watchInterval     time.Duration
 	pendingCursorPath string
 	watchInFlight     bool
+	repoRoot          string
 }
 
 func New(input string, cfg config.Config) mainModel {
@@ -131,6 +133,16 @@ func New(input string, cfg config.Config) mainModel {
 	return m
 }
 
+type repoRootMsg string
+
+func (m mainModel) fetchRepoRoot() tea.Msg {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return repoRootMsg("")
+	}
+	return repoRootMsg(strings.TrimSpace(string(out)))
+}
+
 type watchTickMsg struct{ time.Time }
 
 type watchResultMsg struct {
@@ -139,7 +151,7 @@ type watchResultMsg struct {
 }
 
 func (m mainModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.fetchFileTree, m.diffViewer.Init()}
+	cmds := []tea.Cmd{m.fetchFileTree, m.diffViewer.Init(), m.fetchRepoRoot}
 	if m.watchEnabled {
 		cmds = append(cmds, m.scheduleWatchTick())
 	}
@@ -311,6 +323,9 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.watchInFlight = true
 		return m, m.fetchWatchDiff
+
+	case repoRootMsg:
+		m.repoRoot = string(msg)
 
 	case watchResultMsg:
 		m.watchInFlight = false
@@ -967,8 +982,15 @@ func (m mainModel) openInEditor() tea.Cmd {
 		return nil
 	}
 
-	fullpath := m.fileTree.CurrNodePath()
-	c := exec.Command(editor, fullpath)
+	relpath := m.fileTree.CurrNodePath()
+	var path string
+	if m.repoRoot != "" {
+		path = filepath.Join(m.repoRoot, relpath)
+	} else {
+		path = relpath
+	}
+
+	c := exec.Command(editor, path)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return nil
 	})
