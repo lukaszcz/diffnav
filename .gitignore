@@ -2,3 +2,8 @@ debug.log
 diffnav
 
 dist/
+.agm/
+.agent-files/
+.claude/
+.codex/
+.pi/
