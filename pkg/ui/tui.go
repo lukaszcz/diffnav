@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/log/v2"
+	"github.com/atotto/clipboard"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	zone "github.com/lrstanley/bubblezone/v2"
 
@@ -1127,6 +1128,24 @@ func (m mainModel) renderOverlay(content string) overlayResult {
 	}
 }
 
+// diffPanePoint translates a tea.MouseMsg into content (line, col)
+// coordinates inside the diff pane. Returns ok=false when the message is
+// outside zoneDiffViewer or above the dir-header band.
+func (m mainModel) diffPanePoint(msg tea.MouseMsg) (diffviewer.Point, bool) {
+	z := zone.Get(zoneDiffViewer)
+	if !z.InBounds(msg) {
+		return diffviewer.Point{}, false
+	}
+	paneX, paneY := z.Pos(msg)
+	if paneY < diffviewer.DirHeaderHeight {
+		return diffviewer.Point{}, false
+	}
+	return diffviewer.Point{
+		Line: paneY - diffviewer.DirHeaderHeight + m.diffViewer.YOffset(),
+		Col:  paneX,
+	}, true
+}
+
 func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Handle overlays: scroll or click-outside-to-close.
 	if m.messageOpen || m.helpOpen {
@@ -1208,14 +1227,29 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			if point, ok := m.diffPanePoint(msg); ok {
+				m.diffViewer.StartSelection(point)
+				return m, nil
+			}
 		}
 
 	case tea.MouseReleaseMsg:
 		m.draggingSidebar = false
+		if m.diffViewer.IsSelecting() {
+			if text, ok := m.diffViewer.EndSelection(); ok {
+				if err := clipboard.WriteAll(text); err != nil {
+					log.Debug("clipboard write failed", "err", err)
+				}
+			}
+			return m, nil
+		}
 
 	case tea.MouseMotionMsg:
 		if m.draggingSidebar {
 			return m.handleSidebarDrag(msg)
+		}
+		if m.diffViewer.IsSelecting() {
+			return m.handleDiffSelectionMotion(msg)
 		}
 	}
 
@@ -1321,6 +1355,31 @@ func (m mainModel) handleScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.diffViewer.ScrollDown(lines)
 		}
 	}
+	return m, nil
+}
+
+// handleDiffSelectionMotion extends the active diff-pane selection toward
+// the current cursor position. When the cursor sits above the viewport (over
+// the dir-header band) or below it, the viewport scrolls one line per motion
+// event — TASK_05 may revisit if a true edge-hold scroll loop is needed.
+func (m mainModel) handleDiffSelectionMotion(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	z := zone.Get(zoneDiffViewer)
+	if !z.InBounds(msg) {
+		return m, nil
+	}
+	paneX, paneY := z.Pos(msg)
+	vpHeight := m.mainContentHeight() - diffviewer.DirHeaderHeight
+	switch {
+	case paneY < diffviewer.DirHeaderHeight:
+		m.diffViewer.ScrollUp(1)
+	case paneY >= diffviewer.DirHeaderHeight+vpHeight:
+		m.diffViewer.ScrollDown(1)
+	}
+	line := paneY - diffviewer.DirHeaderHeight + m.diffViewer.YOffset()
+	if line < 0 {
+		line = 0
+	}
+	m.diffViewer.ExtendSelection(diffviewer.Point{Line: line, Col: paneX})
 	return m, nil
 }
 

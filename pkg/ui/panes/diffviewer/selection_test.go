@@ -403,6 +403,182 @@ func TestDetectGutterCol_HunkHeaderRobustness(t *testing.T) {
 	}
 }
 
+// (9) Column clamp left: with gutterCol=40, a drag starting at col 10
+// that extends to col 60 lands head.Col on 39 (gutterCol-1, the last
+// column inside the half-open [0, gutterCol) left band).
+func TestSelection_ColumnClampLeft(t *testing.T) {
+	m := New(true, "auto")
+	m.gutterCol = 40
+
+	m.StartSelection(Point{Line: 0, Col: 10})
+	m.ExtendSelection(Point{Line: 0, Col: 60})
+
+	if m.sel.head.Col != 39 {
+		t.Fatalf("expected head.Col == 39, got %d", m.sel.head.Col)
+	}
+}
+
+// (10) Column clamp right: with gutterCol=40, a drag starting at col 60
+// that extends to col 10 lands head.Col on 41 (gutterCol+1, the first
+// column inside the right band).
+func TestSelection_ColumnClampRight(t *testing.T) {
+	m := New(true, "auto")
+	m.gutterCol = 40
+
+	m.StartSelection(Point{Line: 0, Col: 60})
+	m.ExtendSelection(Point{Line: 0, Col: 10})
+
+	if m.sel.head.Col != 41 {
+		t.Fatalf("expected head.Col == 41, got %d", m.sel.head.Col)
+	}
+}
+
+// (11) Column-aware text extraction: a multi-line drag in the left column
+// yields plaintext that does NOT contain the gutter '│' nor any rune from
+// a column >= gutterCol.
+func TestSelection_LeftColumnExtractionExcludesGutterAndRight(t *testing.T) {
+	m := New(true, "auto")
+	m.vp.SetWidth(70)
+	m.vp.SetHeight(10)
+	m.gutterCol = 30
+
+	// Synthetic side-by-side content: left half (cols 0..29) carries
+	// readable, '│'-free text; the center '│' sits at col 30; the right
+	// half (cols 31..) is filled with distinct tokens we can search for.
+	lines := []string{
+		"alpha leftcol content here   " + " │" + "BETA-RIGHT-LINE-ZERO          ",
+		"gamma leftcol content here   " + " │" + "DELTA-RIGHT-LINE-ONE          ",
+		"epsilon leftcol content here " + " │" + "ZETA-RIGHT-LINE-TWO           ",
+	}
+	// Sanity-check the construction: each left half is exactly 30 visual
+	// columns, putting the center '│' at col 30.
+	for i, ln := range lines {
+		positions := visualColumnsOf(ln, '│')
+		if len(positions) == 0 || positions[0] != 30 {
+			t.Fatalf("line %d: expected '│' at col 30, positions=%v line=%q", i, positions, ln)
+		}
+	}
+	content := strings.Join(lines, "\n")
+	m.file = &cachedNode{path: "test", diff: content}
+
+	m.StartSelection(Point{Line: 0, Col: 6})
+	m.ExtendSelection(Point{Line: 2, Col: 20})
+
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if strings.ContainsRune(text, '│') {
+		t.Fatalf("expected no '│' in extracted text, got %q", text)
+	}
+	for _, tok := range []string{"BETA", "DELTA", "ZETA", "RIGHT"} {
+		if strings.Contains(text, tok) {
+			t.Fatalf("expected text to exclude right-column token %q, got %q", tok, text)
+		}
+	}
+}
+
+// (12) Unified mode: gutterCol == -1, no column clamping. A single-line
+// drag from col 5 to col 70 yields the whole substring between those
+// columns.
+func TestSelection_UnifiedModeNoClamping(t *testing.T) {
+	m := New(false, "auto")
+	if m.gutterCol != -1 {
+		t.Fatalf("expected gutterCol == -1 in unified mode, got %d", m.gutterCol)
+	}
+	m.vp.SetWidth(80)
+	m.vp.SetHeight(5)
+
+	// 80-column line of distinct ASCII so we can verify the substring.
+	const line = "0123456789ABCDEFGHIJ0123456789ABCDEFGHIJ0123456789ABCDEFGHIJ0123456789ABCDEFGHIJ"
+	m.file = &cachedNode{path: "test", diff: line}
+
+	m.StartSelection(Point{Line: 0, Col: 5})
+	m.ExtendSelection(Point{Line: 0, Col: 70})
+
+	if m.sel.head.Col != 70 {
+		t.Fatalf("expected head.Col == 70 (no clamp), got %d", m.sel.head.Col)
+	}
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if want := line[5:70]; text != want {
+		t.Fatalf("expected text %q, got %q", want, text)
+	}
+}
+
+// (13) Mode-toggle: after rendering side-by-side (gutterCol > 0), toggle
+// to unified, feed a fresh diffContentMsg through Update, then verify
+// gutterCol == -1 and that a new selection is not clamped against the
+// stale divider. PLAN.md notes that detection only runs in the
+// diffContentMsg branch — reading gutterCol immediately after
+// SetSideBySide would see the stale value.
+func TestSelection_ModeToggleResetsGutterCol(t *testing.T) {
+	m := New(true, "dark")
+	m.vp.SetWidth(60)
+	m.vp.SetHeight(10)
+
+	// Build a synthetic side-by-side content that the detector will lock
+	// onto: ≥3 '│' per line with the center divider at col 30.
+	pad := func(n int) string { return strings.Repeat(" ", n) }
+	sbsLine := "│" + "  1 " + "│" + pad(24) + "│" + pad(24) + "│"
+	sbsContent := strings.Repeat(sbsLine+"\n", 4)
+
+	sbsKey := cacheKey("/", true)
+	m.cache[sbsKey] = &cachedNode{path: "/"}
+	m.renderID = 1
+	m, _ = m.Update(diffContentMsg{
+		cacheKey: sbsKey,
+		text:     sbsContent,
+		renderID: 1,
+	})
+	if m.gutterCol <= 0 {
+		t.Fatalf("expected gutterCol > 0 after side-by-side render, got %d", m.gutterCol)
+	}
+
+	// Sample selection while side-by-side: clamps against the divider.
+	m.StartSelection(Point{Line: 0, Col: 10})
+	m.ExtendSelection(Point{Line: 0, Col: 200})
+	if m.sel.head.Col >= m.gutterCol {
+		t.Fatalf(
+			"expected head.Col clamped below gutter, got head.Col=%d gutterCol=%d",
+			m.sel.head.Col, m.gutterCol,
+		)
+	}
+	m.ClearSelection()
+
+	// Toggle to unified. SetSideBySide flips m.sideBySide and asks diff()
+	// for a refresh; if it returns a cmd we execute it, otherwise we
+	// simulate the eventual diffContentMsg ourselves. Either way, the
+	// gutter reset only happens when a new diffContentMsg lands.
+	if cmd := m.SetSideBySide(false); cmd != nil {
+		if msg := cmd(); msg != nil {
+			m, _ = m.Update(msg)
+		}
+	}
+	unifiedKey := cacheKey("/", false)
+	if _, ok := m.cache[unifiedKey]; !ok {
+		m.cache[unifiedKey] = &cachedNode{path: "/"}
+	}
+	m.renderID++
+	m, _ = m.Update(diffContentMsg{
+		cacheKey: unifiedKey,
+		text:     "plain unified content without any divider runes at all here",
+		renderID: m.renderID,
+	})
+	if m.gutterCol != -1 {
+		t.Fatalf("expected gutterCol == -1 in unified mode, got %d", m.gutterCol)
+	}
+
+	// New selection is not clamped against the previous divider.
+	m.StartSelection(Point{Line: 0, Col: 5})
+	m.ExtendSelection(Point{Line: 0, Col: 50})
+	if m.sel.head.Col != 50 {
+		t.Fatalf("expected head.Col == 50 (no clamp), got %d", m.sel.head.Col)
+	}
+}
+
 // View() returns the original viewport output unchanged when no selection
 // is active and none is finalized. Guards the common-path short-circuit.
 func TestView_NoSelectionNoOverlay(t *testing.T) {

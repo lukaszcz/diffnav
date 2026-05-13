@@ -21,7 +21,10 @@ import (
 	"github.com/dlvhdr/diffnav/pkg/utils"
 )
 
-const dirHeaderHeight = 3
+// DirHeaderHeight is the height of the header band rendered above the
+// diff viewport. Exported so callers translating mouse coordinates into
+// content rows (see tui.go's diffPanePoint) can skip past it.
+const DirHeaderHeight = 3
 
 type cachedNode struct {
 	path      string
@@ -182,7 +185,7 @@ func (m *Model) SetSize(width, height int) tea.Cmd {
 	m.Width = width
 	m.Height = height
 	m.vp.SetWidth(m.contentWidth())
-	m.vp.SetHeight(m.Height - dirHeaderHeight)
+	m.vp.SetHeight(m.Height - DirHeaderHeight)
 	m.ClearCache()
 	return m.diff()
 }
@@ -267,7 +270,7 @@ func (m Model) headerView() string {
 
 	return base.
 		Width(m.Width).
-		Height(dirHeaderHeight - 1).
+		Height(DirHeaderHeight - 1).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
 		BorderForeground(lipgloss.Color("8")).
@@ -283,7 +286,7 @@ func (m Model) dirHeaderView() string {
 	bottom := filenode.ViewDiffStats(m.dir.additions, m.dir.deletions, base)
 	return base.
 		Width(m.Width).
-		Height(dirHeaderHeight - 1).
+		Height(DirHeaderHeight - 1).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
 		BorderForeground(lipgloss.Color("8")).
@@ -371,6 +374,11 @@ func (m *Model) ScrollBottom() {
 // ScrollTop scrolls the viewport to its top.
 func (m *Model) ScrollTop() {
 	m.vp.GotoTop()
+}
+
+// YOffset returns the viewport's current top content row.
+func (m *Model) YOffset() int {
+	return m.vp.YOffset()
 }
 
 // StartSelection begins a new selection anchored at p. Derives colBand from
