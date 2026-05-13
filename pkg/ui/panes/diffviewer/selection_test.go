@@ -2,11 +2,13 @@ package diffviewer
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/x/ansi"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // (1) Single-line selection: ansi.Strip of the spliced output contains the
@@ -241,6 +243,163 @@ func TestSelection_SurvivesViewportScroll(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(line2), "line-07") {
 		t.Fatalf("view2: expected highlighted row to contain %q, got %q", "line-07", ansi.Strip(line2))
+	}
+}
+
+// (8) Column detection on a known delta side-by-side render fixture.
+// Expect gutterCol close to width/2 and stable across content lines.
+func TestDetectGutterCol_DeltaSideBySideFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sbs_render_w120.ansi"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	stripped := ansi.Strip(string(raw))
+
+	const width = 120
+	got := detectGutterCol(stripped, width)
+
+	target := width / 2
+	if absInt(got-target) > 10 {
+		t.Fatalf("gutterCol=%d not within ±10 of width/2=%d", got, target)
+	}
+
+	// Stability: every content line (≥3 dividers) must place its center
+	// '│' at the same column the detector picked.
+	contentLines := 0
+	for _, line := range strings.Split(stripped, "\n") {
+		positions := visualColumnsOf(line, '│')
+		if len(positions) < 3 {
+			continue
+		}
+		contentLines++
+		nearest := positions[0]
+		for _, p := range positions {
+			if absInt(p-target) < absInt(nearest-target) {
+				nearest = p
+			}
+		}
+		if nearest != got {
+			t.Fatalf("line %q: nearest-to-midpoint %d != detected %d", line, nearest, got)
+		}
+	}
+	if contentLines < 2 {
+		t.Fatalf("fixture only has %d content lines; detector input is too thin", contentLines)
+	}
+}
+
+// (14) Wide-character gutter detection. Feed a side-by-side render with CJK
+// and emoji to the left of the gutter; assert gutterCol (visual column)
+// lands on the actual '│' divider, not on a rune-index that skewed left.
+func TestDetectGutterCol_WideCharsToLeftOfGutter(t *testing.T) {
+	// Hand-construct lines where the center '│' sits at visual column 30,
+	// with CJK / emoji to its left. Each line has ≥3 '│' so it passes the
+	// skip-line gate. The runes-to-the-left would skew a rune-index-based
+	// detector by 6+ columns; a visual-column detector must see col 30.
+	//
+	// Layout per line:
+	//   '│'  cols 0
+	//   '  1 '  cols 1..4
+	//   '│'  col 5
+	//   CJK/emoji block (each rune width 2) + padding to reach col 30
+	//   '│'  col 30  <-- center divider
+	//   right-side filler + '│' at the right border
+	//
+	// We pick width=60 so target=30 aligns with the planted center column.
+	pad := func(width int) string { return strings.Repeat(" ", width) }
+	// Left side: 24 visual cols of content after the post-LN '│' (col 5),
+	// putting the center '│' at col 5+1+24 = 30.
+	leftBlocks := []string{
+		"日本語テスト" + pad(12),       // 6 CJK * 2 = 12 visual, +12 spaces = 24
+		"こんにちは世界" + pad(10),       // 7 CJK * 2 = 14 visual, +10 spaces = 24
+		"🐶🐱🐭🐹" + pad(16),       // 4 emoji * 2 = 8 visual, +16 spaces = 24
+	}
+	rightFiller := pad(24)
+	lines := make([]string, 0, len(leftBlocks))
+	for _, lb := range leftBlocks {
+		// "│" + "  1 " + "│" + leftBlock(24) + "│" + rightFiller(24) + "│"
+		lines = append(lines, "│"+"  1 "+"│"+lb+"│"+rightFiller+"│")
+	}
+
+	// Sanity: every line must have the center '│' at visual col 30.
+	for _, l := range lines {
+		positions := visualColumnsOf(l, '│')
+		if len(positions) < 3 {
+			t.Fatalf("line missing dividers (have %d): %q", len(positions), l)
+		}
+		found := false
+		for _, p := range positions {
+			if p == 30 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected a '│' at visual col 30; positions=%v line=%q", positions, l)
+		}
+	}
+
+	got := detectGutterCol(strings.Join(lines, "\n"), 60)
+	if got != 30 {
+		t.Fatalf("gutterCol: want 30 (visual col of center '│'), got %d", got)
+	}
+}
+
+// (15) Tabs in diff content: delta's current config expands tabs to spaces in
+// the output we read from m.file.diff. This test is a TRIPWIRE — if a future
+// delta version or config option ships raw tabs, the col↔visual-column math
+// in the selection layer (visualColumnsOf, ansi.Cut, etc.) needs revisiting
+// because a single '\t' rune occupies multiple visual columns and is not
+// width-1 like the rest of our coordinate math assumes.
+func TestDeltaOutput_NoRawTabs_Tripwire(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sbs_render_w120.ansi"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	stripped := ansi.Strip(string(raw))
+	// The input fixture (sbs_input.diff) contains literal '\t' indentation,
+	// so a delta that *didn't* expand tabs would surface them here.
+	if strings.ContainsRune(stripped, '\t') {
+		t.Fatalf("delta output unexpectedly contains raw '\\t' — tab expansion is off; selection col math needs revisiting")
+	}
+}
+
+// (16) First-N robustness: a diff whose first 10 content lines mix hunk-
+// header decorations (which have <3 '│' and are skipped by the gate) and
+// real diff rows still converges on the same gutterCol as a clean run.
+func TestDetectGutterCol_HunkHeaderRobustness(t *testing.T) {
+	// "Clean" content line: '│' at cols 0, 5, 30, 55.
+	pad := func(n int) string { return strings.Repeat(" ", n) }
+	clean := "│" + "  1 " + "│" + pad(24) + "│" + pad(24) + "│"
+	// Hunk-header / decoration lines: 0 or 1 '│', skipped by the gate.
+	headers := []string{
+		"───┐",
+		"42: │", // 1 '│' — exactly at the gate's lower bound, still skipped.
+		"───┘",
+		"@@ -1,8 +1,9 @@",
+	}
+
+	// Reference: a "clean run" with only content lines.
+	cleanRun := strings.Repeat(clean+"\n", 4)
+	want := detectGutterCol(cleanRun, 60)
+	if want != 30 {
+		t.Fatalf("sanity: clean run want gutter at 30, got %d", want)
+	}
+
+	// Mixed: 4 header decorations interleaved with 4 content lines, well
+	// within the first-10-content-lines window.
+	mixed := strings.Join([]string{
+		headers[0],
+		headers[1],
+		clean,
+		headers[2],
+		clean,
+		headers[3],
+		clean,
+		clean,
+	}, "\n")
+	got := detectGutterCol(mixed, 60)
+	if got != want {
+		t.Fatalf("mixed-headers run: got %d, want %d (same as clean run)", got, want)
 	}
 }
 

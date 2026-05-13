@@ -126,6 +126,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cache[msg.cacheKey].diff = diff
 		}
 		m.vp.SetContent(diff)
+		// Reset first so a side-by-side → unified toggle drops the stale divider.
+		m.gutterCol = -1
+		if m.sideBySide {
+			m.gutterCol = detectGutterCol(ansi.Strip(diff), m.vp.Width())
+		}
 	}
 
 	return m, tea.Batch(cmds...)
