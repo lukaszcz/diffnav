@@ -229,6 +229,7 @@ If you want the exact delta configuration I'm using - [it can be found here](htt
 | <kbd>s</kbd>                | Toggle side-by-side/unified view |
 | <kbd>Tab</kbd>              | Switch focus between the panes   |
 | <kbd>q</kbd>                | Quit                             |
+| Drag in diff pane           | Select & copy diff text to clipboard (single column in side-by-side) |
 
 ## Discord
 

@@ -24,6 +24,7 @@ type KeyMap struct {
 	ToggleIconStyle key.Binding
 	ToggleHelp      key.Binding
 	ToggleMessage   key.Binding
+	DragCopyDiff    key.Binding
 }
 
 var keys = &KeyMap{
@@ -111,6 +112,10 @@ var keys = &KeyMap{
 		key.WithKeys("m"),
 		key.WithHelp("m", "commit info"),
 	),
+	DragCopyDiff: key.NewBinding(
+		key.WithKeys(),
+		key.WithHelp("drag", "select & copy in diff pane"),
+	),
 }
 
 func KeyGroups() [][]key.Binding {
@@ -131,6 +136,7 @@ func KeyGroups() [][]key.Binding {
 		keys.OpenInEditor,
 		keys.ToggleDiffView,
 		keys.ToggleIconStyle,
+		keys.DragCopyDiff,
 	}, {
 		keys.ToggleMessage,
 		keys.ToggleHelp,
