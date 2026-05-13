@@ -1359,27 +1359,55 @@ func (m mainModel) handleScroll(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleDiffSelectionMotion extends the active diff-pane selection toward
-// the current cursor position. When the cursor sits above the viewport (over
-// the dir-header band) or below it, the viewport scrolls one line per motion
-// event — TASK_05 may revisit if a true edge-hold scroll loop is needed.
+// the current cursor position. When the cursor crosses above the viewport
+// (over the dir-header band) or below it (past the pane edge), the viewport
+// scrolls one line per motion event and the selection is re-extended at the
+// new edge line. The terminal stops emitting motion events when the mouse is
+// held still, so continued scrolling requires a wiggle — this is the
+// documented v1 limit (see PLAN.md "Auto-scroll while dragging past the
+// edge").
 func (m mainModel) handleDiffSelectionMotion(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	z := zone.Get(zoneDiffViewer)
-	if !z.InBounds(msg) {
+	if !m.diffViewer.IsSelecting() {
 		return m, nil
 	}
-	paneX, paneY := z.Pos(msg)
-	vpHeight := m.mainContentHeight() - diffviewer.DirHeaderHeight
+	z := zone.Get(zoneDiffViewer)
+	if z.IsZero() {
+		return m, nil
+	}
+	// Compute zone-relative coords manually so paneY can be negative (cursor
+	// above the pane) or past the pane bottom — InBounds would gate those out.
+	mouse := msg.Mouse()
+	if mouse.X < z.StartX || mouse.X > z.EndX {
+		// Outside the diff column horizontally: ignore (e.g. cursor over the
+		// filetree). Don't auto-scroll in this case.
+		return m, nil
+	}
+	paneX := mouse.X - z.StartX
+	paneY := mouse.Y - z.StartY
+	vpHeight := m.diffViewer.Height()
+	clampedX := paneX
+	if clampedX < 0 {
+		clampedX = 0
+	}
+	if vpWidth := m.diffViewer.Width(); vpWidth > 0 && clampedX > vpWidth-1 {
+		clampedX = vpWidth - 1
+	}
 	switch {
 	case paneY < diffviewer.DirHeaderHeight:
 		m.diffViewer.ScrollUp(1)
+		line := m.diffViewer.YOffset()
+		m.diffViewer.ExtendSelection(diffviewer.Point{Line: line, Col: clampedX})
 	case paneY >= diffviewer.DirHeaderHeight+vpHeight:
 		m.diffViewer.ScrollDown(1)
+		line := m.diffViewer.YOffset() + vpHeight - 1
+		m.diffViewer.ExtendSelection(diffviewer.Point{Line: line, Col: clampedX})
+	default:
+		point, ok := m.diffPanePoint(msg)
+		if !ok {
+			return m, nil
+		}
+		m.diffViewer.ExtendSelection(point)
 	}
-	line := paneY - diffviewer.DirHeaderHeight + m.diffViewer.YOffset()
-	if line < 0 {
-		line = 0
-	}
-	m.diffViewer.ExtendSelection(diffviewer.Point{Line: line, Col: paneX})
 	return m, nil
 }
 

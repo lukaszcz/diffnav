@@ -182,16 +182,29 @@ func (m Model) applyHighlight(vpView string) string {
 }
 
 func (m *Model) SetSize(width, height int) tea.Cmd {
-	m.Width = width
-	m.Height = height
+	m.Common.Width = width
+	m.Common.Height = height
 	m.vp.SetWidth(m.contentWidth())
-	m.vp.SetHeight(m.Height - DirHeaderHeight)
+	m.vp.SetHeight(m.Common.Height - DirHeaderHeight)
 	m.ClearCache()
 	return m.diff()
 }
 
 func (m Model) contentWidth() int {
-	return m.Width - scrollbarWidth
+	return m.Common.Width - scrollbarWidth
+}
+
+// Height returns the diff viewport's visible row count (excluding the
+// dir-header band). Mouse-edge logic uses this to detect dragging past the
+// pane edge.
+func (m *Model) Height() int {
+	return m.vp.Height()
+}
+
+// Width returns the diff viewport's content column count (excluding the
+// scrollbar gutter).
+func (m *Model) Width() int {
+	return m.vp.Width()
 }
 
 func (m *Model) diff() tea.Cmd {
@@ -263,13 +276,13 @@ func (m Model) headerView() string {
 
 	fileIcon := icons.GetIcon(name, false)
 	prefix := base.Render(fileIcon) + base.Render(" ")
-	name = utils.TruncateString(name, m.Width-lipgloss.Width(prefix))
+	name = utils.TruncateString(name, m.Common.Width-lipgloss.Width(prefix))
 	top := prefix + base.Bold(true).Render(name)
 
 	bottom := filenode.ViewFileDiffStats(m.file.files[0], base)
 
 	return base.
-		Width(m.Width).
+		Width(m.Common.Width).
 		Height(DirHeaderHeight - 1).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
@@ -280,12 +293,12 @@ func (m Model) headerView() string {
 func (m Model) dirHeaderView() string {
 	base := lipgloss.NewStyle().Foreground(lipgloss.Blue)
 	prefix := base.Render(" ")
-	name := utils.TruncateString(m.dir.path, m.Width-lipgloss.Width(prefix))
+	name := utils.TruncateString(m.dir.path, m.Common.Width-lipgloss.Width(prefix))
 
 	top := prefix + base.Bold(true).Render(name)
 	bottom := filenode.ViewDiffStats(m.dir.additions, m.dir.deletions, base)
 	return base.
-		Width(m.Width).
+		Width(m.Common.Width).
 		Height(DirHeaderHeight - 1).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderBottom(true).
