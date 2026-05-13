@@ -3,6 +3,7 @@ package diffviewer
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
@@ -52,6 +53,10 @@ type Model struct {
 	// nil means unknown (leave delta behavior unchanged).
 	isDarkBackground *bool
 	preamble         string
+	sel              selection
+	// gutterCol is the visual column of the side-by-side center divider.
+	// -1 means "no column constraint" (unified mode or not yet detected).
+	gutterCol int
 }
 
 // SetPreamble stores the preamble text (e.g. commit metadata from git show).
@@ -73,6 +78,7 @@ func New(sideBySide bool, theme string) Model {
 		sideBySide: sideBySide,
 		cache:      map[string]*cachedNode{},
 		themeMode:  parseThemeMode(theme),
+		gutterCol:  -1,
 	}
 	switch m.themeMode {
 	case themeLight:
@@ -129,11 +135,42 @@ const scrollbarWidth = 3 // 1 space + 1 scrollbar character + 1 padding
 
 func (m Model) View() string {
 	vpView := m.vp.View()
+	if m.sel.active || m.sel.has {
+		vpView = m.applyHighlight(vpView)
+	}
 	scrollbar := common.RenderScrollbar(m.vp.Height(), m.vp.TotalLineCount(), m.vp.YOffset())
 	if scrollbar != "" {
 		vpView = lipgloss.JoinHorizontal(lipgloss.Top, vpView, " ", scrollbar)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), vpView)
+}
+
+// applyHighlight overlays SGR-reverse video on the visible viewport rows that
+// fall inside the active or finalized selection. Returns the input unchanged
+// when the selection is fully off-screen.
+func (m Model) applyHighlight(vpView string) string {
+	start, end := m.sel.normalized()
+	top := m.vp.YOffset()
+	bottom := top + m.vp.Height()
+	if end.Line < top || start.Line >= bottom {
+		return vpView
+	}
+	visible := strings.Split(vpView, "\n")
+	for screenRow, line := range visible {
+		contentLine := top + screenRow
+		if contentLine < start.Line || contentLine > end.Line {
+			continue
+		}
+		w := lipgloss.Width(line)
+		a, b := highlightRange(contentLine, start, end, w)
+		a, b = clampToBand(a, b, m.sel.colBand)
+		a, b = clampToLine(a, b, w)
+		if a >= b {
+			continue
+		}
+		visible[screenRow] = spliceReverse(line, a, b, w)
+	}
+	return strings.Join(visible, "\n")
 }
 
 func (m *Model) SetSize(width, height int) tea.Cmd {
@@ -329,6 +366,128 @@ func (m *Model) ScrollBottom() {
 // ScrollTop scrolls the viewport to its top.
 func (m *Model) ScrollTop() {
 	m.vp.GotoTop()
+}
+
+// StartSelection begins a new selection anchored at p. Derives colBand from
+// p.Col and m.gutterCol per the column-clamping rules in PLAN.md. Sets
+// active=true, has=false. Any prior selection is replaced.
+func (m *Model) StartSelection(p Point) {
+	var lo, hi int
+	switch {
+	case m.gutterCol < 0:
+		// Unified mode or undetected: no column constraint.
+		lo, hi = 0, math.MaxInt
+	case p.Col < m.gutterCol:
+		lo, hi = 0, m.gutterCol
+	case p.Col > m.gutterCol:
+		lo, hi = m.gutterCol+1, math.MaxInt
+	default:
+		// p.Col == m.gutterCol — snap left.
+		lo, hi = 0, m.gutterCol
+	}
+	m.sel = selection{
+		anchor:  p,
+		head:    p,
+		colBand: [2]int{lo, hi},
+		active:  true,
+	}
+}
+
+// ExtendSelection moves the selection head to p, clamping p.Col into the
+// active colBand. The line axis is never clamped — vertical drag spans the
+// full content. No-op when no drag is active.
+func (m *Model) ExtendSelection(p Point) {
+	if !m.sel.active {
+		return
+	}
+	lo, hi := m.sel.colBand[0], m.sel.colBand[1]
+	if p.Col < lo {
+		p.Col = lo
+	}
+	if p.Col >= hi {
+		// colBand is half-open [lo, hi); the last valid head column is hi-1.
+		p.Col = hi - 1
+	}
+	m.sel.head = p
+}
+
+// EndSelection finalizes an active selection. If the head never moved away
+// from the anchor it returns ("", false) with the selection cleared.
+// Otherwise it returns (selectedText, true) and leaves the finalized
+// highlight in place until the next event clears it.
+func (m *Model) EndSelection() (string, bool) {
+	if !m.sel.active {
+		return "", false
+	}
+	m.sel.active = false
+	if m.sel.anchor == m.sel.head {
+		m.sel.has = false
+		return "", false
+	}
+	m.sel.has = true
+	return m.selectedText(), true
+}
+
+// ClearSelection drops all selection state.
+func (m *Model) ClearSelection() {
+	m.sel = selection{}
+}
+
+// HasSelection reports whether a finalized non-empty selection exists.
+func (m *Model) HasSelection() bool {
+	return m.sel.has
+}
+
+// IsSelecting reports whether a drag is currently in progress.
+func (m *Model) IsSelecting() bool {
+	return m.sel.active
+}
+
+// GutterCol returns the detected side-by-side divider column, or -1 for
+// unified mode / undetected.
+func (m *Model) GutterCol() int {
+	return m.gutterCol
+}
+
+// selectedText extracts the ANSI-stripped plaintext under the current
+// selection from the cached diff content. Returns "" when no content is
+// loaded or the relevant cached node has no diff text.
+func (m *Model) selectedText() string {
+	var src string
+	switch {
+	case m.file != nil:
+		src = m.file.diff
+	case m.dir != nil:
+		src = m.dir.diff
+	default:
+		return ""
+	}
+	if src == "" {
+		return ""
+	}
+	start, end := m.sel.normalized()
+	lines := strings.Split(src, "\n")
+	if start.Line < 0 || start.Line >= len(lines) {
+		return ""
+	}
+	endLine := end.Line
+	if endLine >= len(lines) {
+		endLine = len(lines) - 1
+	}
+	out := make([]string, 0, endLine-start.Line+1)
+	for i := start.Line; i <= endLine; i++ {
+		line := lines[i]
+		w := lipgloss.Width(line)
+		a, b := highlightRange(i, start, end, w)
+		a, b = clampToBand(a, b, m.sel.colBand)
+		a, b = clampToLine(a, b, w)
+		if a >= b {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, ansi.Strip(ansi.Cut(line, a, b)))
+	}
+	return strings.Join(out, "\n")
 }
 
 func diffFile(

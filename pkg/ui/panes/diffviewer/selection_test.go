@@ -1,6 +1,7 @@
 package diffviewer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -164,5 +165,95 @@ func TestSpliceReverse_EmptyAndPlainLine(t *testing.T) {
 	out := spliceReverse(line, 6, 10, w)
 	if got, want := ansi.Strip(out), line; got != want {
 		t.Fatalf("plain line round-trip:\n  got:  %q\n  want: %q", got, want)
+	}
+}
+
+// (4) Click-without-drag leaves no selection: StartSelection followed by
+// EndSelection with anchor unchanged returns (_, false) and HasSelection
+// remains false.
+func TestSelection_ClickWithoutDragLeavesNoSelection(t *testing.T) {
+	m := New(false, "auto")
+	m.StartSelection(Point{Line: 3, Col: 5})
+	if !m.IsSelecting() {
+		t.Fatalf("expected IsSelecting() == true immediately after StartSelection")
+	}
+
+	text, ok := m.EndSelection()
+	if ok {
+		t.Fatalf("expected ok == false for click-without-drag, got text=%q", text)
+	}
+	if text != "" {
+		t.Fatalf("expected empty text, got %q", text)
+	}
+	if m.HasSelection() {
+		t.Fatalf("expected HasSelection() == false after click-without-drag")
+	}
+	if m.IsSelecting() {
+		t.Fatalf("expected IsSelecting() == false after EndSelection")
+	}
+}
+
+// (5) Selection survives viewport scroll: the highlighted screen row shifts
+// by the scroll delta and the underlying content is unchanged.
+func TestSelection_SurvivesViewportScroll(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(40)
+	m.vp.SetHeight(5)
+
+	var b strings.Builder
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "line-%02d-some-content\n", i)
+	}
+	m.vp.SetContent(strings.TrimSuffix(b.String(), "\n"))
+
+	// Single-line selection on content line 7 covering "line-07".
+	m.StartSelection(Point{Line: 7, Col: 0})
+	m.ExtendSelection(Point{Line: 7, Col: 7})
+
+	// YOffset=5 → visible content rows 5..9 → line 7 at screen row 2.
+	m.ScrollDown(5)
+	view1 := m.View()
+
+	// YOffset=6 → visible content rows 6..10 → line 7 at screen row 1.
+	m.ScrollDown(1)
+	view2 := m.View()
+
+	findHighlight := func(label, s string) (int, string) {
+		for i, l := range strings.Split(s, "\n") {
+			if strings.Contains(l, "\x1b[7m") {
+				return i, l
+			}
+		}
+		t.Fatalf("%s: no highlighted row found in:\n%s", label, s)
+		return -1, ""
+	}
+
+	row1, line1 := findHighlight("view1", view1)
+	row2, line2 := findHighlight("view2", view2)
+
+	if row2 != row1-1 {
+		t.Fatalf("expected highlight row to shift up by 1 after ScrollDown(1): row1=%d row2=%d", row1, row2)
+	}
+	// Trailing scrollbar character may differ between views (it tracks scroll
+	// position); compare only the content portion that came from the viewport.
+	if !strings.Contains(ansi.Strip(line1), "line-07") {
+		t.Fatalf("view1: expected highlighted row to contain %q, got %q", "line-07", ansi.Strip(line1))
+	}
+	if !strings.Contains(ansi.Strip(line2), "line-07") {
+		t.Fatalf("view2: expected highlighted row to contain %q, got %q", "line-07", ansi.Strip(line2))
+	}
+}
+
+// View() returns the original viewport output unchanged when no selection
+// is active and none is finalized. Guards the common-path short-circuit.
+func TestView_NoSelectionNoOverlay(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(40)
+	m.vp.SetHeight(5)
+	m.vp.SetContent("alpha\nbeta\ngamma")
+
+	out := m.View()
+	if strings.Contains(out, "\x1b[7m") || strings.Contains(out, "\x1b[27m") {
+		t.Fatalf("expected no SGR-reverse escapes when sel.active==false && sel.has==false, got:\n%q", out)
 	}
 }
