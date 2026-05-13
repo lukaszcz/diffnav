@@ -1,8 +1,7 @@
 package filetree
 
 import (
-	"os"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -10,9 +9,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	ltree "charm.land/lipgloss/v2/tree"
+	"charm.land/log/v2"
 	"github.com/atotto/clipboard"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
-	"github.com/charmbracelet/log"
 
 	"github.com/dlvhdr/diffnav/pkg/config"
 	"github.com/dlvhdr/diffnav/pkg/constants"
@@ -140,6 +139,60 @@ func (m *Model) Up() {
 	m.t.Up()
 }
 
+func (m *Model) GoToBottom() {
+	m.t.GoToBottom()
+}
+
+func (m *Model) GoToTop() {
+	m.t.GoToTop()
+}
+
+// NextFile moves the cursor to the next file node, skipping directories.
+func (m *Model) NextFile() bool {
+	curr := m.t.NodeAtCurrentOffset()
+	if curr == nil {
+		return false
+	}
+	nodes := m.t.AllNodes()
+	found := false
+	for _, node := range nodes {
+		if !found {
+			if node.YOffset() == curr.YOffset() {
+				found = true
+			}
+			continue
+		}
+		if _, ok := node.GivenValue().(*filenode.FileNode); ok {
+			m.t.SetYOffset(node.YOffset())
+			return true
+		}
+	}
+	return false
+}
+
+// PrevFile moves the cursor to the previous file node, skipping directories.
+func (m *Model) PrevFile() bool {
+	curr := m.t.NodeAtCurrentOffset()
+	if curr == nil {
+		return false
+	}
+	nodes := m.t.AllNodes()
+	lastFileOffset := -1
+	for _, node := range nodes {
+		if node.YOffset() >= curr.YOffset() {
+			break
+		}
+		if _, ok := node.GivenValue().(*filenode.FileNode); ok {
+			lastFileOffset = node.YOffset()
+		}
+	}
+	if lastFileOffset >= 0 {
+		m.t.SetYOffset(lastFileOffset)
+		return true
+	}
+	return false
+}
+
 func (m *Model) SetCursorByPath(path string) {
 	if len(m.files) == 0 {
 		return
@@ -171,8 +224,22 @@ func (m *Model) rebuildTree() {
 	t = collapseTree(t)
 	t, _ = truncateTree(t, 0, 0, 0, m.cfg, m.t.Width())
 	m.t.SetNodes(t)
+	if m.cfg.UI.StartFoldersOpenDepth >= 0 {
+		closeDirsBelow(m.t.Root(), m.cfg.UI.StartFoldersOpenDepth)
+	}
 	m.t.SetWidth(m.t.Width())
 	m.updateStyles()
+}
+
+func closeDirsBelow(node *tree.Node, maxOpenDepth int) {
+	for _, child := range node.ChildNodes() {
+		closeDirsBelow(child, maxOpenDepth)
+	}
+	if _, ok := node.GivenValue().(*dirnode.DirNode); ok {
+		if node.Depth() > maxOpenDepth {
+			node.Close()
+		}
+	}
 }
 
 func buildFullFileTree(files []*gitdiff.File, cfg config.Config) *tree.Node {
@@ -182,8 +249,13 @@ func buildFullFileTree(files []*gitdiff.File, cfg config.Config) *tree.Node {
 		subTree := t
 
 		name := filenode.GetFileName(file)
-		dir := filepath.Dir(name)
-		parts := strings.Split(dir, string(os.PathSeparator))
+		// git diff always emits forward-slash paths regardless of host OS, so
+		// use the path package (forward-slash) rather than filepath /
+		// os.PathSeparator. On Windows the latter would split on `\\` and
+		// never find the `/` separators, leaving every file as a flat root
+		// child with no directory hierarchy. See #121.
+		dir := path.Dir(name)
+		parts := strings.Split(dir, "/")
 		existingPath := ""
 
 		// walk the tree to find existing path
@@ -193,7 +265,7 @@ func buildFullFileTree(files []*gitdiff.File, cfg config.Config) *tree.Node {
 			for _, child := range children {
 				if dir, ok := child.GivenValue().(*dirnode.DirNode); ok && dir.Name == part {
 					subTree = child
-					existingPath = existingPath + part + string(os.PathSeparator)
+					existingPath = existingPath + part + "/"
 					found = true
 					// found a part of the path, continue to the subtree
 					break
@@ -206,7 +278,7 @@ func buildFullFileTree(files []*gitdiff.File, cfg config.Config) *tree.Node {
 
 		// path does not exist from this point, need to create it
 		leftover := strings.TrimPrefix(name, existingPath)
-		parts = strings.Split(leftover, string(os.PathSeparator))
+		parts = strings.Split(leftover, "/")
 		for i, part := range parts {
 			var c *tree.Node
 			if i == len(parts)-1 {
@@ -218,7 +290,7 @@ func buildFullFileTree(files []*gitdiff.File, cfg config.Config) *tree.Node {
 			} else {
 				dirNode := dirnode.DirNode{
 					Name:     part,
-					FullPath: filepath.Join(existingPath, filepath.Join(parts[:i]...), part),
+					FullPath: path.Join(existingPath, path.Join(parts[:i]...), part),
 				}
 				c = tree.Root(&dirNode)
 				subTree.Child(c)
@@ -275,7 +347,6 @@ func collapseTree(t *tree.Node) *tree.Node {
 		child := newChildren[0]
 		// If the child is dir with one chlid that's also a dir -> collapse it
 		if dir, ok := child.GivenValue().(*dirnode.DirNode); ok {
-
 			// if the only child is a tree and its parent is the root we don't want to collapse.
 			// The root should always be visible
 			if rootDir.Name == constants.RootName {
@@ -283,8 +354,8 @@ func collapseTree(t *tree.Node) *tree.Node {
 			}
 
 			newDir := dirnode.DirNode{
-				FullPath: filepath.Join(rootDir.FullPath, dir.Name),
-				Name:     filepath.Join(rootDir.Name, dir.Name),
+				FullPath: path.Join(rootDir.FullPath, dir.Name),
+				Name:     path.Join(rootDir.Name, dir.Name),
 			}
 			children := make([]any, 0)
 			for _, c := range child.ChildNodes() {

@@ -8,6 +8,10 @@ type KeyMap struct {
 	ToggleNode      key.Binding
 	Up              key.Binding
 	Down            key.Binding
+	Bottom          key.Binding
+	Top             key.Binding
+	NextFile        key.Binding
+	PrevFile        key.Binding
 	CtrlD           key.Binding
 	CtrlU           key.Binding
 	ToggleFileTree  key.Binding
@@ -19,6 +23,7 @@ type KeyMap struct {
 	ToggleDiffView  key.Binding
 	ToggleIconStyle key.Binding
 	ToggleHelp      key.Binding
+	ToggleMessage   key.Binding
 }
 
 var keys = &KeyMap{
@@ -41,6 +46,22 @@ var keys = &KeyMap{
 	Down: key.NewBinding(
 		key.WithKeys("down", "j"),
 		key.WithHelp("↓/j", "next file"),
+	),
+	Bottom: key.NewBinding(
+		key.WithKeys("G"),
+		key.WithHelp("G", "bottom"),
+	),
+	Top: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "top"),
+	),
+	NextFile: key.NewBinding(
+		key.WithKeys("n"),
+		key.WithHelp("n", "next file"),
+	),
+	PrevFile: key.NewBinding(
+		key.WithKeys("p", "N"),
+		key.WithHelp("p/N", "prev file"),
 	),
 	CtrlD: key.NewBinding(
 		key.WithKeys("ctrl+d"),
@@ -67,7 +88,7 @@ var keys = &KeyMap{
 		key.WithHelp("y", "copy file path"),
 	),
 	SwitchPanel: key.NewBinding(
-		key.WithKeys("tab"),
+		key.WithKeys("tab", "shift+tab"),
 		key.WithHelp("tab", "switch panel"),
 	),
 	OpenInEditor: key.NewBinding(
@@ -83,8 +104,12 @@ var keys = &KeyMap{
 		key.WithHelp("i", "toggle icon style"),
 	),
 	ToggleHelp: key.NewBinding(
-		key.WithKeys("?"),
-		key.WithHelp("?", "toggle help"),
+		key.WithKeys("?", "f1"),
+		key.WithHelp("F1/?", "toggle help"),
+	),
+	ToggleMessage: key.NewBinding(
+		key.WithKeys("m"),
+		key.WithHelp("m", "commit info"),
 	),
 }
 
@@ -93,6 +118,10 @@ func KeyGroups() [][]key.Binding {
 		keys.SwitchPanel,
 		keys.Up,
 		keys.Down,
+		keys.Top,
+		keys.Bottom,
+		keys.NextFile,
+		keys.PrevFile,
 		keys.CtrlD,
 		keys.CtrlU,
 	}, {
@@ -103,6 +132,7 @@ func KeyGroups() [][]key.Binding {
 		keys.ToggleDiffView,
 		keys.ToggleIconStyle,
 	}, {
+		keys.ToggleMessage,
 		keys.ToggleHelp,
 		keys.Quit,
 	}}

@@ -41,16 +41,22 @@ func cacheKey(path string, sideBySide bool) string {
 
 type Model struct {
 	common.Common
-	vp         viewport.Model
-	file       *cachedNode
-	dir        *cachedNode
-	cache      nodeCache
+	vp    viewport.Model
+	file  *cachedNode
+	dir   *cachedNode
+	cache nodeCache
 	// Monotonic render generation used to drop stale async results.
 	renderID   uint64
 	sideBySide bool
 	themeMode  themeMode
 	// nil means unknown (leave delta behavior unchanged).
 	isDarkBackground *bool
+	preamble         string
+}
+
+// SetPreamble stores the preamble text (e.g. commit metadata from git show).
+func (m *Model) SetPreamble(preamble string) {
+	m.preamble = preamble
 }
 
 type themeMode uint8
@@ -88,9 +94,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "down", "j":
+		case "down", "j", "n":
 			break
-		case "up", "k":
+		case "up", "k", "N", "p":
 			break
 		default:
 			vp, vpCmd := m.vp.Update(msg)
@@ -119,17 +125,28 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+const scrollbarWidth = 3 // 1 space + 1 scrollbar character + 1 padding
+
 func (m Model) View() string {
-	return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.vp.View())
+	vpView := m.vp.View()
+	scrollbar := common.RenderScrollbar(m.vp.Height(), m.vp.TotalLineCount(), m.vp.YOffset())
+	if scrollbar != "" {
+		vpView = lipgloss.JoinHorizontal(lipgloss.Top, vpView, " ", scrollbar)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), vpView)
 }
 
 func (m *Model) SetSize(width, height int) tea.Cmd {
 	m.Width = width
 	m.Height = height
-	m.vp.SetWidth(m.Width)
+	m.vp.SetWidth(m.contentWidth())
 	m.vp.SetHeight(m.Height - dirHeaderHeight)
-	m.cache = make(nodeCache)
+	m.ClearCache()
 	return m.diff()
+}
+
+func (m Model) contentWidth() int {
+	return m.Width - scrollbarWidth
 }
 
 func (m *Model) diff() tea.Cmd {
@@ -153,7 +170,7 @@ func (m *Model) diff() tea.Cmd {
 		m.file = node
 		m.cache[key] = node
 		m.renderID++
-		return diffFile(node, m.Width, m.sideBySide, m.deltaThemeArgs(), m.renderID)
+		return diffFile(node, m.contentWidth(), m.sideBySide, m.deltaThemeArgs(), m.renderID)
 	} else if m.dir != nil {
 		key := cacheKey(m.dir.path, m.sideBySide)
 		if cached, ok := m.cache[key]; ok && cached.diff != "" {
@@ -170,12 +187,17 @@ func (m *Model) diff() tea.Cmd {
 		m.dir = node
 		m.cache[key] = node
 		m.renderID++
+		preamble := ""
+		if m.dir.path == "/" {
+			preamble = m.preamble
+		}
 		return diffDir(
 			node,
-			m.Width,
+			m.contentWidth(),
 			m.sideBySide,
 			m.deltaThemeArgs(),
 			common.SelectionColor(common.Selected, m.isDarkBackground),
+			preamble,
 			m.renderID,
 		)
 	}
@@ -299,6 +321,16 @@ func (m *Model) ScrollDown(lines int) {
 	m.vp.ScrollDown(lines)
 }
 
+// ScrollBottom scrolls the viewport to the bottom.
+func (m *Model) ScrollBottom() {
+	m.vp.GotoBottom()
+}
+
+// ScrollTop scrolls the viewport to its top.
+func (m *Model) ScrollTop() {
+	m.vp.GotoTop()
+}
+
 func diffFile(
 	node *cachedNode,
 	width int,
@@ -341,6 +373,7 @@ func diffDir(
 	sideBySide bool,
 	themeArgs []string,
 	selectedBg color.Color,
+	preamble string,
 	renderID uint64,
 ) tea.Cmd {
 	if width == 0 || dir == nil {
@@ -380,7 +413,11 @@ func diffDir(
 			return common.ErrMsg{Err: err}
 		}
 
-		return diffContentMsg{cacheKey: key, text: string(out), renderID: renderID}
+		text := string(out)
+		if preamble != "" {
+			text = renderPreamble(preamble) + "\n" + text
+		}
+		return diffContentMsg{cacheKey: key, text: text, renderID: renderID}
 	}
 }
 
@@ -433,10 +470,46 @@ func parseThemeMode(v string) themeMode {
 	}
 }
 
+func renderPreamble(preamble string) string {
+	preamble = strings.TrimSpace(preamble)
+	if preamble == "" {
+		return ""
+	}
+
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	yellow := lipgloss.NewStyle().Foreground(lipgloss.Yellow)
+
+	var out []string
+	for _, line := range strings.Split(preamble, "\n") {
+		switch {
+		case strings.HasPrefix(line, "commit "):
+			out = append(
+				out,
+				dim.Render("commit ")+yellow.Render(strings.TrimPrefix(line, "commit ")),
+			)
+		case strings.HasPrefix(line, "Author:"),
+			strings.HasPrefix(line, "AuthorDate:"),
+			strings.HasPrefix(line, "Date:"),
+			strings.HasPrefix(line, "Commit:"),
+			strings.HasPrefix(line, "CommitDate:"),
+			strings.HasPrefix(line, "Merge:"):
+			out = append(out, dim.Render(line))
+		default:
+			out = append(out, line)
+		}
+	}
+
+	return strings.Join(out, "\n")
+}
+
 type diffContentMsg struct {
 	cacheKey string
 	text     string
 	renderID uint64
+}
+
+func (m *Model) ClearCache() {
+	m.cache = make(nodeCache)
 }
 
 func (m *Model) RootDiffStats() (int64, int64) {

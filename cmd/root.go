@@ -14,16 +14,17 @@ import (
 	"github.com/spf13/cobra"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/fang/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/fang"
-	"github.com/charmbracelet/log"
+	"charm.land/log/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone/v2"
-	"github.com/muesli/termenv"
 
 	"github.com/dlvhdr/diffnav/pkg/config"
 	"github.com/dlvhdr/diffnav/pkg/ui"
 	"github.com/dlvhdr/diffnav/pkg/version"
+	"github.com/dlvhdr/diffnav/pkg/watch"
 )
 
 //go:embed logo-diff-part.txt
@@ -49,6 +50,10 @@ gh pr diff https://github.com/dlvhdr/gh-dash/pull/447 | diffnav
 
 # set up as the global git diff pager
 git config --global pager.diff diffnav
+
+# watch mode: auto-refresh a diff command
+diffnav --watch
+diffnav --watch --watch-cmd "git diff HEAD" --watch-interval 5s
 	`,
 }
 
@@ -80,6 +85,11 @@ func init() {
 
 	rootCmd.Flags().BoolP("unified", "u", false, "Force unified diff view")
 
+	rootCmd.Flags().
+		BoolP("watch", "w", false, "Watch mode: periodically re-run a diff command and refresh")
+	rootCmd.Flags().String("watch-cmd", "git diff", "Command to run in watch mode")
+	rootCmd.Flags().Duration("watch-interval", 2*time.Second, "Interval between watch refreshes")
+
 	rootCmd.SetVersionTemplate("\n" + logo + "\n" + `{{printf "version %s\n" .Version}}`)
 
 	rootCmd.Run = func(cmd *cobra.Command, args []string) {
@@ -98,17 +108,23 @@ func init() {
 			log.Fatal("Cannot parse the help flag", err)
 		}
 
-		zone.NewGlobal()
-
-		stat, err := os.Stdin.Stat()
+		watchFlag, err := cmd.Flags().GetBool("watch")
 		if err != nil {
-			panic(err)
+			log.Fatal("Cannot parse the watch flag", err)
+		}
+		watchCmd, err := cmd.Flags().GetString("watch-cmd")
+		if err != nil {
+			log.Fatal("Cannot parse the watch-cmd flag", err)
+		}
+		watchInterval, err := cmd.Flags().GetDuration("watch-interval")
+		if err != nil {
+			log.Fatal("Cannot parse the watch-interval flag", err)
+		}
+		if cmd.Flags().Changed("watch-cmd") {
+			watchFlag = true
 		}
 
-		if !helpFlag && stat.Mode()&os.ModeNamedPipe == 0 && stat.Size() == 0 {
-			fmt.Println("No diff, exiting")
-			os.Exit(0)
-		}
+		zone.NewGlobal()
 
 		if os.Getenv("DEBUG") == "true" {
 			var fileErr error
@@ -131,7 +147,7 @@ func init() {
 				log.SetLevel(log.DebugLevel)
 
 				log.SetOutput(logFile)
-				log.SetColorProfile(termenv.TrueColor)
+				log.SetColorProfile(colorprofile.TrueColor)
 				wd, err := os.Getwd()
 				if err != nil {
 					fmt.Println("Error getting current working dir", err)
@@ -145,26 +161,50 @@ func init() {
 			log.SetLevel(log.FatalLevel)
 		}
 
-		reader := bufio.NewReader(os.Stdin)
-		var b strings.Builder
-
-		for {
-			r, _, err := reader.ReadRune()
-			if err != nil && err == io.EOF {
-				break
+		var input string
+		if watchFlag {
+			stat, sErr := os.Stdin.Stat()
+			if sErr == nil && stat.Mode()&os.ModeNamedPipe != 0 {
+				fmt.Fprintln(os.Stderr, "Warning: stdin input ignored in watch mode")
 			}
-			_, err = b.WriteRune(r)
-			if err != nil {
-				fmt.Println("Error getting input:", err)
-				os.Exit(1)
+			output, wErr := watch.RunCmd(watchCmd)
+			if wErr != nil {
+				log.Warn("initial watch command failed, starting with empty diff", "err", wErr)
+			}
+			input = output
+		} else {
+			stat, sErr := os.Stdin.Stat()
+			if sErr != nil {
+				panic(sErr)
+			}
+
+			if !helpFlag && stat.Mode()&os.ModeNamedPipe == 0 && stat.Size() == 0 {
+				fmt.Println("No diff, exiting")
+				os.Exit(0)
+			}
+
+			reader := bufio.NewReader(os.Stdin)
+			var b strings.Builder
+
+			for {
+				r, _, rErr := reader.ReadRune()
+				if rErr != nil && rErr == io.EOF {
+					break
+				}
+				_, rErr = b.WriteRune(r)
+				if rErr != nil {
+					fmt.Println("Error getting input:", rErr)
+					os.Exit(1)
+				}
+			}
+
+			input = ansi.Strip(b.String())
+			if strings.TrimSpace(input) == "" {
+				fmt.Println("No input provided, exiting")
+				os.Exit(0)
 			}
 		}
 
-		input := ansi.Strip(b.String())
-		if strings.TrimSpace(input) == "" {
-			fmt.Println("No input provided, exiting")
-			os.Exit(0)
-		}
 		cfg := config.Load()
 
 		// Override config with CLI flags if specified
@@ -172,6 +212,12 @@ func init() {
 			cfg.UI.SideBySide = false
 		} else if sideBySideFlag {
 			cfg.UI.SideBySide = true
+		}
+
+		cfg.Watch = config.WatchConfig{
+			Enabled:  watchFlag,
+			Cmd:      watchCmd,
+			Interval: watchInterval,
 		}
 
 		ttyIn, ttyOut, err := tea.OpenTTY()
