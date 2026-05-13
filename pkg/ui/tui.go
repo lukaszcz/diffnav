@@ -259,6 +259,11 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
+		case msg.Key().Code == tea.KeyEscape:
+			if m.diffViewer.HasSelection() {
+				m.diffViewer.ClearSelection()
+			}
+			return m, tea.Batch(cmds...)
 		case key.Matches(msg, keys.Search):
 			m.searching = true
 			m.search.SetWidth(m.searchWidth())

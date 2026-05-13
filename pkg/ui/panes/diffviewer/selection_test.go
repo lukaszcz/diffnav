@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -243,6 +244,29 @@ func TestSelection_SurvivesViewportScroll(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(line2), "line-07") {
 		t.Fatalf("view2: expected highlighted row to contain %q, got %q", "line-07", ansi.Strip(line2))
+	}
+}
+
+// (7) Loading a new file via SetFilePatch clears any prior finalized
+// selection. Guards against stale selection state surviving a content swap.
+func TestSelection_SetFilePatchClearsSelection(t *testing.T) {
+	m := New(false, "auto")
+	m.vp.SetWidth(40)
+	m.vp.SetHeight(5)
+	m.file = &cachedNode{path: "old.go", diff: "first line\nsecond line\nthird line"}
+
+	m.StartSelection(Point{Line: 0, Col: 0})
+	m.ExtendSelection(Point{Line: 1, Col: 5})
+	if _, ok := m.EndSelection(); !ok {
+		t.Fatalf("setup: expected EndSelection ok=true after a real drag")
+	}
+	if !m.HasSelection() {
+		t.Fatalf("setup: expected HasSelection() == true before SetFilePatch")
+	}
+
+	m, _ = m.SetFilePatch(&gitdiff.File{NewName: "new.go"})
+	if m.HasSelection() {
+		t.Fatalf("expected HasSelection() == false after SetFilePatch")
 	}
 }
 

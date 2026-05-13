@@ -117,6 +117,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if msg.renderID != m.renderID {
 			break
 		}
+		// Clear before gutter detection so a mid-drag content swap leaves
+		// sel.active == false; the next MouseMotionMsg is a no-op until the
+		// next click.
+		m.sel = selection{}
 		// Truncate lines to viewport width to prevent ANSI escape overflow.
 		lines := strings.Split(msg.text, "\n")
 		for i, line := range lines {
@@ -307,6 +311,7 @@ func (m Model) dirHeaderView() string {
 }
 
 func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
+	m.sel = selection{}
 	m.dir = nil
 
 	fname := filenode.GetFileName(file)
@@ -333,6 +338,7 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 }
 
 func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cmd) {
+	m.sel = selection{}
 	m.file = nil
 
 	key := cacheKey(dirPath, m.sideBySide)
