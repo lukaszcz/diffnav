@@ -30,11 +30,13 @@ func SelectionColor(key Key, isDarkBackground *bool) color.Color {
 		return Colors[key]
 	}
 
+	// Match delta's light-mode palette: #dadada is delta's neutral
+	// gutter/line-number tone, paired with a slightly darker emphasis grey.
 	switch key {
 	case Selected:
-		return lipgloss.Color("#E7ECF3")
+		return lipgloss.Color("#dadada")
 	case DarkerSelected:
-		return lipgloss.Color("#D5DEE8")
+		return lipgloss.Color("#bcbcbc")
 	default:
 		return Colors[key]
 	}

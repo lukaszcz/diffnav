@@ -438,22 +438,13 @@ func (m Model) deltaThemeArgs() []string {
 		return nil
 	}
 
-	// Light terminals: force high-contrast readable content in side-by-side mode.
+	// Let delta drive the light-mode colors. Its --light defaults use named
+	// ANSI colors that terminals render natively, which avoids the grey
+	// downsampling we'd hit if we sent desaturated 24-bit hex like #ffebe9
+	// through a piped subprocess.
 	return []string{
 		"--light",
-		"--syntax-theme=Monokai Extended Light",
-		"--zero-style=syntax",
-		"--line-numbers-left-style=normal",
-		"--line-numbers-right-style=normal",
-		"--line-numbers-zero-style=normal",
-		"--line-numbers-minus-style=red \"#ffebe9\"",
-		"--line-numbers-plus-style=green \"#dafbe1\"",
-		"--minus-style=syntax \"#ffebe9\"",
-		"--plus-style=syntax \"#dafbe1\"",
-		"--minus-non-emph-style=syntax \"#ffebe9\"",
-		"--plus-non-emph-style=syntax \"#dafbe1\"",
-		"--minus-emph-style=syntax bold \"#ffd8d3\"",
-		"--plus-emph-style=syntax bold \"#b9f6ca\"",
+		"--syntax-theme=GitHub",
 	}
 }
 

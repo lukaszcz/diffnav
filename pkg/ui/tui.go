@@ -866,9 +866,10 @@ func (m mainModel) footerView() string {
 	var helpBg color.Color = lipgloss.BrightBlack
 	var helpFg color.Color = lipgloss.NoColor{}
 	if m.isDarkBackground != nil && !*m.isDarkBackground {
-		sepColor = lipgloss.Color("#64748B")
-		helpBg = lipgloss.Color("#C7D2DE")
-		helpFg = lipgloss.Color("#334155")
+		// Match delta's light-mode palette.
+		sepColor = lipgloss.Color("#666666")
+		helpBg = lipgloss.Color("#bcbcbc")
+		helpFg = lipgloss.Color("#333333")
 	}
 	base := lipgloss.NewStyle().Background(baseBg)
 	files := fmt.Sprintf(" %d files", len(m.files))
