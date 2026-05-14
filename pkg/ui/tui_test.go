@@ -538,7 +538,10 @@ func TestDiffPageDownScrollsDiffWhenFileTreeActive(t *testing.T) {
 	m.diffViewer.SetDarkBackground(true)
 	m.fileTree.SetDarkBackground(true)
 
-	m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 160, Height: 40})
+	// Use a tight window so PgDn's scroll-by-viewport-height advance is much
+	// smaller than the fixture — keeps the assertion robust against
+	// fluctuations in fixture size.
+	m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 160, Height: 20})
 	m = updateMainModel(t, m, m.fetchFileTree())
 
 	deadline := time.Now().Add(3 * time.Second)
