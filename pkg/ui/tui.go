@@ -256,6 +256,18 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.helpOpen || m.messageOpen:
 			// Block all other keys while an overlay is open
 			return m, tea.Batch(cmds...)
+		case key.Matches(msg, keys.DiffLineUp):
+			m.diffViewer.ScrollUp(1)
+			return m, tea.Batch(cmds...)
+		case key.Matches(msg, keys.DiffLineDown):
+			m.diffViewer.ScrollDown(1)
+			return m, tea.Batch(cmds...)
+		case key.Matches(msg, keys.DiffPageUp):
+			m.diffViewer.ScrollUp(m.diffViewer.Height())
+			return m, tea.Batch(cmds...)
+		case key.Matches(msg, keys.DiffPageDown):
+			m.diffViewer.ScrollDown(m.diffViewer.Height())
+			return m, tea.Batch(cmds...)
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
 		case msg.Key().Code == tea.KeyEscape:

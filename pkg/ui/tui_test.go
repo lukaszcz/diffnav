@@ -459,6 +459,118 @@ func TestEnterOnDirectoryStillToggles(t *testing.T) {
 	}
 }
 
+// Diff-scroll keys (ctrl+up/down, pgup/pgdown) must scroll the diff pane
+// without disturbing the file tree, regardless of which panel is active.
+func TestDiffScrollKeysDoNotDisturbFileTree(t *testing.T) {
+	cases := []struct {
+		name string
+		key  tea.Key
+	}{
+		{"ctrl+down", tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}},
+		{"ctrl+up", tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}},
+		{"pgdown", tea.Key{Code: tea.KeyPgDown}},
+		{"pgup", tea.Key{Code: tea.KeyPgUp}},
+	}
+	for _, tc := range cases {
+		for _, panel := range []Panel{FileTreePanel, DiffViewerPanel} {
+			t.Run(tc.name+"/panel="+panelName(panel), func(t *testing.T) {
+				m := newTestMainModel(t)
+				m.width = 160
+				m.height = 40
+				m.activePanel = panel
+				before := m.fileTree.CurrNodePath()
+
+				updated := updateMainModel(t, m, tea.KeyPressMsg(tc.key))
+
+				if got := updated.fileTree.CurrNodePath(); got != before {
+					t.Fatalf("expected filetree cursor to stay on %q, got %q", before, got)
+				}
+				if updated.activePanel != panel {
+					t.Fatalf(
+						"expected active panel to remain %v, got %v",
+						panel,
+						updated.activePanel,
+					)
+				}
+			})
+		}
+	}
+}
+
+// Pressing pgdown with the file tree active must advance the diff viewport.
+// This is the end-to-end signal that the new keys are routed to the diff pane
+// instead of being swallowed by the file tree.
+func TestDiffPageDownScrollsDiffWhenFileTreeActive(t *testing.T) {
+	if _, err := exec.LookPath("delta"); err != nil {
+		t.Skip("delta not installed, skipping end-to-end test")
+	}
+	m := newTestMainModel(t)
+	isDark := true
+	m.isDarkBackground = &isDark
+	m.diffViewer.SetDarkBackground(true)
+	m.fileTree.SetDarkBackground(true)
+
+	m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 160, Height: 40})
+	m = updateMainModel(t, m, m.fetchFileTree())
+
+	deadline := time.Now().Add(3 * time.Second)
+	for m.diffViewer.Height() <= 0 || !diffViewerHasContent(m) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for diff content to load")
+		}
+		if cmd := m.diffViewer.Init(); cmd != nil {
+			if msg := cmd(); msg != nil {
+				m = updateMainModel(t, m, msg)
+			}
+		}
+		m.diffViewer.ClearCache()
+		if cmd := m.diffViewer.SetSize(
+			m.width-m.sidebarWidth(),
+			m.mainContentHeight(),
+		); cmd != nil {
+			if msg := cmd(); msg != nil {
+				m = updateMainModel(t, m, msg)
+			}
+		}
+	}
+
+	m.activePanel = FileTreePanel
+	if m.diffViewer.YOffset() != 0 {
+		t.Fatalf(
+			"precondition: expected YOffset==0 before scrolling, got %d",
+			m.diffViewer.YOffset(),
+		)
+	}
+
+	m = updateMainModel(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	if m.diffViewer.YOffset() == 0 {
+		t.Fatal("expected diff viewport to advance after pgdown")
+	}
+
+	m = updateMainModel(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+	if m.diffViewer.YOffset() != 0 {
+		t.Fatalf(
+			"expected diff viewport to return to top after pgup, got YOffset=%d",
+			m.diffViewer.YOffset(),
+		)
+	}
+}
+
+func diffViewerHasContent(m mainModel) bool {
+	// The viewport reports a height of 1 even when empty; rendered content
+	// always contains at least one diff-related line once delta resolves.
+	view := m.diffViewer.View()
+	return strings.Contains(view, "diff") || strings.Contains(view, "@@") ||
+		strings.Contains(view, "│")
+}
+
+func panelName(p Panel) string {
+	if p == FileTreePanel {
+		return "filetree"
+	}
+	return "diffviewer"
+}
+
 func newTestMainModel(t *testing.T) mainModel {
 	t.Helper()
 	zone.NewGlobal()

@@ -14,6 +14,10 @@ type KeyMap struct {
 	PrevFile        key.Binding
 	CtrlD           key.Binding
 	CtrlU           key.Binding
+	DiffLineUp      key.Binding
+	DiffLineDown    key.Binding
+	DiffPageUp      key.Binding
+	DiffPageDown    key.Binding
 	ToggleFileTree  key.Binding
 	Search          key.Binding
 	Quit            key.Binding
@@ -72,6 +76,22 @@ var keys = &KeyMap{
 		key.WithKeys("ctrl+u"),
 		key.WithHelp("ctrl+u", "diff up"),
 	),
+	DiffLineUp: key.NewBinding(
+		key.WithKeys("ctrl+up"),
+		key.WithHelp("ctrl+↑", "diff line up"),
+	),
+	DiffLineDown: key.NewBinding(
+		key.WithKeys("ctrl+down"),
+		key.WithHelp("ctrl+↓", "diff line down"),
+	),
+	DiffPageUp: key.NewBinding(
+		key.WithKeys("pgup"),
+		key.WithHelp("PgUp", "diff page up"),
+	),
+	DiffPageDown: key.NewBinding(
+		key.WithKeys("pgdown"),
+		key.WithHelp("PgDn", "diff page down"),
+	),
 	ToggleFileTree: key.NewBinding(
 		key.WithKeys("e"),
 		key.WithHelp("e", "toggle file tree"),
@@ -129,6 +149,10 @@ func KeyGroups() [][]key.Binding {
 		keys.PrevFile,
 		keys.CtrlD,
 		keys.CtrlU,
+		keys.DiffLineUp,
+		keys.DiffLineDown,
+		keys.DiffPageUp,
+		keys.DiffPageDown,
 	}, {
 		keys.ToggleFileTree,
 		keys.Search,
