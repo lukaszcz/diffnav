@@ -76,9 +76,9 @@ tasks:
       GOEXPERIMENT: null
 
   build:
-    desc: Build all packages
+    desc: Build the diffnav binary
     cmds:
-      - go build ./...
+      - go build -o diffnav .
 
   test:
     cmds:
