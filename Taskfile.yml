@@ -75,10 +75,22 @@ tasks:
     env:
       GOEXPERIMENT: null
 
+  build:
+    desc: Build all packages
+    cmds:
+      - go build ./...
+
   test:
     cmds:
-      - go test -v ./...
-    desc: Run tests
+      - go test {{.CLI_ARGS}} ./...
+    desc: "Run tests. Pass flags after --, e.g. task test -- -v"
+
+  check:
+    desc: Run fmt, lint, and tests
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
 
   fmt:
     desc: Run golangci-lint fmt
