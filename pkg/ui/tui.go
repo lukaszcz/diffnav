@@ -1240,6 +1240,7 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.draggingSidebar = false
 		if m.diffViewer.IsSelecting() {
 			if text, ok := m.diffViewer.EndSelection(); ok {
+				m.diffViewer.ClearSelection()
 				return m, tea.SetClipboard(text)
 			}
 			return m, nil
