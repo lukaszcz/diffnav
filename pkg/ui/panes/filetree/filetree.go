@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	ltree "charm.land/lipgloss/v2/tree"
 	"charm.land/log/v2"
-	"github.com/atotto/clipboard"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 
 	"github.com/dlvhdr/diffnav/pkg/config"
@@ -477,14 +476,7 @@ func (m *Model) CurrNodePath() string {
 }
 
 func (m *Model) CopyCurrNodePath() tea.Cmd {
-	fullpath := m.CurrNodePath()
-	err := clipboard.WriteAll(fullpath)
-	if err != nil {
-		return func() tea.Msg {
-			return common.ErrMsg{Err: err}
-		}
-	}
-	return nil
+	return tea.SetClipboard(m.CurrNodePath())
 }
 
 // ScrollUp scrolls the viewport up by the given number of lines.

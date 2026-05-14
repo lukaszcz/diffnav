@@ -17,7 +17,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/log/v2"
-	"github.com/atotto/clipboard"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	zone "github.com/lrstanley/bubblezone/v2"
 
@@ -420,8 +419,7 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case common.ErrMsg:
-		fmt.Printf("Error: %v\n", msg.Err)
-		log.Fatal(msg.Err)
+		log.Error("error", "err", msg.Err)
 	}
 
 	// Route messages: key messages go only to active panel, other messages go to both.
@@ -1242,9 +1240,7 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.draggingSidebar = false
 		if m.diffViewer.IsSelecting() {
 			if text, ok := m.diffViewer.EndSelection(); ok {
-				if err := clipboard.WriteAll(text); err != nil {
-					log.Debug("clipboard write failed", "err", err)
-				}
+				return m, tea.SetClipboard(text)
 			}
 			return m, nil
 		}
