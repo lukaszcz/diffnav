@@ -253,6 +253,12 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.messageOpen && key.Matches(msg, keys.CtrlU):
 			m.messageVp.ScrollUp(m.messageVp.Height() / 2)
 			return m, tea.Batch(cmds...)
+		case m.messageOpen && key.Matches(msg, keys.DiffPageDown):
+			m.messageVp.ScrollDown(m.messageVp.Height())
+			return m, tea.Batch(cmds...)
+		case m.messageOpen && key.Matches(msg, keys.DiffPageUp):
+			m.messageVp.ScrollUp(m.messageVp.Height())
+			return m, tea.Batch(cmds...)
 		case m.helpOpen || m.messageOpen:
 			// Block all other keys while an overlay is open
 			return m, tea.Batch(cmds...)

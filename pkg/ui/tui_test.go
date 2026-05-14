@@ -587,6 +587,31 @@ func TestDiffPageDownScrollsDiffWhenFileTreeActive(t *testing.T) {
 	}
 }
 
+// Pressing pgdown / pgup while the commit-info overlay is open must scroll
+// the overlay viewport, matching the up/down/ctrl+d/ctrl+u bindings.
+func TestMessageOverlayPageKeysScrollOverlay(t *testing.T) {
+	m := newTestMainModel(t)
+	m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.preamble = strings.Repeat("preamble line\n", 200)
+	m.messageOpen = true
+	m.updateMessageVp()
+	m.messageVp.GotoTop()
+
+	before := m.messageVp.YOffset()
+	m = updateMainModel(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	if m.messageVp.YOffset() <= before {
+		t.Fatalf("expected pgdown to advance overlay YOffset from %d, got %d",
+			before, m.messageVp.YOffset())
+	}
+
+	before = m.messageVp.YOffset()
+	m = updateMainModel(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+	if m.messageVp.YOffset() >= before {
+		t.Fatalf("expected pgup to retreat overlay YOffset from %d, got %d",
+			before, m.messageVp.YOffset())
+	}
+}
+
 func diffViewerHasContent(m mainModel) bool {
 	// The viewport reports a height of 1 even when empty; rendered content
 	// always contains at least one diff-related line once delta resolves.
