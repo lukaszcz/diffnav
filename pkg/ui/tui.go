@@ -353,6 +353,17 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
+		case key.Matches(msg, keys.ToggleNode):
+			if m.activePanel == FileTreePanel {
+				if node := m.fileTree.GetCurrNode(); node != nil {
+					if _, ok := node.GivenValue().(*filenode.FileNode); ok {
+						if cmd = m.openInEditor(); cmd != nil {
+							cmds = append(cmds, cmd)
+						}
+						return m, tea.Batch(cmds...)
+					}
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:

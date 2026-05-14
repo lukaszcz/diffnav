@@ -386,6 +386,79 @@ func TestRightSideSelectionEndToEnd(t *testing.T) {
 // header height constant.
 func diffviewerDirHeaderHeight() int { return 3 }
 
+// Enter on a highlighted file should launch $EDITOR and skip the
+// directory-toggle path the filetree pane uses for Enter on dirs.
+func TestEnterOnFileOpensEditor(t *testing.T) {
+	t.Setenv("EDITOR", "true")
+	m := newTestMainModel(t)
+	m.activePanel = FileTreePanel
+	m.fileTree.SetCursorByPath("yarn.lock")
+
+	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil command (editor exec) when Enter hits a file with $EDITOR set")
+	}
+	// The cursor must still be on the same file; pressing Enter on a file
+	// must not toggle/collapse anything in the tree.
+	if got := result.fileTree.CurrNodePath(); got != "yarn.lock" {
+		t.Fatalf("expected cursor to remain on yarn.lock, got %q", got)
+	}
+}
+
+// Without $EDITOR set, Enter on a file must be a no-op rather than falling
+// through to the directory-toggle behavior.
+func TestEnterOnFileWithoutEditorIsNoop(t *testing.T) {
+	t.Setenv("EDITOR", "")
+	m := newTestMainModel(t)
+	m.activePanel = FileTreePanel
+	m.fileTree.SetCursorByPath("yarn.lock")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if got := result.fileTree.CurrNodePath(); got != "yarn.lock" {
+		t.Fatalf("expected cursor to remain on yarn.lock, got %q", got)
+	}
+}
+
+// Regression: Enter on a directory still toggles it (the new file-open
+// behavior must only apply to file nodes).
+func TestEnterOnDirectoryStillToggles(t *testing.T) {
+	m := newTestMainModel(t)
+	m.activePanel = FileTreePanel
+	m.fileTree.SetCursorByPath("graphql-server/tests")
+
+	dirNode := m.fileTree.GetCurrNode()
+	if dirNode == nil {
+		t.Fatal("expected to find graphql-server/tests directory node")
+	}
+	wasOpen := dirNode.IsOpen()
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+
+	toggled := result.fileTree.GetCurrNode()
+	if toggled == nil {
+		t.Fatal("expected current node after toggle")
+	}
+	if toggled.IsOpen() == wasOpen {
+		t.Fatalf(
+			"expected dir open state to toggle from %v, got %v",
+			wasOpen,
+			toggled.IsOpen(),
+		)
+	}
+}
+
 func newTestMainModel(t *testing.T) mainModel {
 	t.Helper()
 	zone.NewGlobal()
