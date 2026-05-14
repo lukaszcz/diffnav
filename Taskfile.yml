@@ -78,6 +78,7 @@ tasks:
   build:
     desc: Build the diffnav binary
     cmds:
+      - go build ./...
       - go build -o diffnav .
 
   test:
