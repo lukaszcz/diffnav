@@ -148,10 +148,14 @@ func TestHiddenSidebarGrabDoesNotConsumeDiffViewerClicks(t *testing.T) {
 		t.Fatalf("unexpected model type %T", updated)
 	}
 	if result.isShowingFileTree {
-		t.Fatal("expected click one column right of the hidden grab line to fall through to the diff viewer")
+		t.Fatal(
+			"expected click one column right of the hidden grab line to fall through to the diff viewer",
+		)
 	}
 	if result.draggingSidebar {
-		t.Fatal("expected click one column right of the hidden grab line to not start a sidebar drag")
+		t.Fatal(
+			"expected click one column right of the hidden grab line to not start a sidebar drag",
+		)
 	}
 }
 
@@ -174,7 +178,11 @@ func TestDiffViewerClickJustRightOfDividerDoesNotStartDragging(t *testing.T) {
 			t.Fatalf("offset=%d: unexpected model type %T", offset, updated)
 		}
 		if result.draggingSidebar {
-			t.Fatalf("offset=%d: expected click %d col(s) right of divider to not start a sidebar drag", offset, offset)
+			t.Fatalf(
+				"offset=%d: expected click %d col(s) right of divider to not start a sidebar drag",
+				offset,
+				offset,
+			)
 		}
 	}
 }
@@ -310,10 +318,7 @@ func TestRightSideSelectionEndToEnd(t *testing.T) {
 	// Drain the diff Cmd(s) until a diffContentMsg lands in diffViewer
 	// (delta runs in a goroutine via the Cmd indirection).
 	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if m.diffViewer.GutterCol() > 0 {
-			break
-		}
+	for m.diffViewer.GutterCol() <= 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for diffContentMsg; gutterCol still %d",
 				m.diffViewer.GutterCol())
@@ -326,7 +331,10 @@ func TestRightSideSelectionEndToEnd(t *testing.T) {
 		}
 		// Best-effort: re-trigger a render so the dir delta call resolves.
 		m.diffViewer.ClearCache()
-		if cmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight()); cmd != nil {
+		if cmd := m.diffViewer.SetSize(
+			m.width-m.sidebarWidth(),
+			m.mainContentHeight(),
+		); cmd != nil {
 			if msg := cmd(); msg != nil {
 				m = updateMainModel(t, m, msg)
 			}
@@ -354,7 +362,11 @@ func TestRightSideSelectionEndToEnd(t *testing.T) {
 		Button: tea.MouseLeft,
 	}))
 	if !m.diffViewer.IsSelecting() {
-		t.Fatalf("expected diffViewer.IsSelecting()==true after click at (x=%d,y=%d)", rightX, clickY)
+		t.Fatalf(
+			"expected diffViewer.IsSelecting()==true after click at (x=%d,y=%d)",
+			rightX,
+			clickY,
+		)
 	}
 	m = updateMainModel(t, m, tea.MouseMotionMsg(tea.Mouse{
 		X:      rightX + 10,
@@ -364,7 +376,9 @@ func TestRightSideSelectionEndToEnd(t *testing.T) {
 
 	view := m.View().Content
 	if !strings.Contains(view, "\x1b[7m") {
-		t.Fatalf("expected reverse-video escape (\\x1b[7m) in View() after right-side drag — selection rendered nothing")
+		t.Fatalf(
+			"expected reverse-video escape (\\x1b[7m) in View() after right-side drag — selection rendered nothing",
+		)
 	}
 }
 

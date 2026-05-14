@@ -235,15 +235,27 @@ func TestSelection_SurvivesViewportScroll(t *testing.T) {
 	row2, line2 := findHighlight("view2", view2)
 
 	if row2 != row1-1 {
-		t.Fatalf("expected highlight row to shift up by 1 after ScrollDown(1): row1=%d row2=%d", row1, row2)
+		t.Fatalf(
+			"expected highlight row to shift up by 1 after ScrollDown(1): row1=%d row2=%d",
+			row1,
+			row2,
+		)
 	}
 	// Trailing scrollbar character may differ between views (it tracks scroll
 	// position); compare only the content portion that came from the viewport.
 	if !strings.Contains(ansi.Strip(line1), "line-07") {
-		t.Fatalf("view1: expected highlighted row to contain %q, got %q", "line-07", ansi.Strip(line1))
+		t.Fatalf(
+			"view1: expected highlighted row to contain %q, got %q",
+			"line-07",
+			ansi.Strip(line1),
+		)
 	}
 	if !strings.Contains(ansi.Strip(line2), "line-07") {
-		t.Fatalf("view2: expected highlighted row to contain %q, got %q", "line-07", ansi.Strip(line2))
+		t.Fatalf(
+			"view2: expected highlighted row to contain %q, got %q",
+			"line-07",
+			ansi.Strip(line2),
+		)
 	}
 }
 
@@ -333,9 +345,9 @@ func TestDetectGutterCol_WideCharsToLeftOfGutter(t *testing.T) {
 	// Left side: 24 visual cols of content after the post-LN '│' (col 5),
 	// putting the center '│' at col 5+1+24 = 30.
 	leftBlocks := []string{
-		"日本語テスト" + pad(12),       // 6 CJK * 2 = 12 visual, +12 spaces = 24
-		"こんにちは世界" + pad(10),       // 7 CJK * 2 = 14 visual, +10 spaces = 24
-		"🐶🐱🐭🐹" + pad(16),       // 4 emoji * 2 = 8 visual, +16 spaces = 24
+		"日本語テスト" + pad(12),  // 6 CJK * 2 = 12 visual, +12 spaces = 24
+		"こんにちは世界" + pad(10), // 7 CJK * 2 = 14 visual, +10 spaces = 24
+		"🐶🐱🐭🐹" + pad(16),    // 4 emoji * 2 = 8 visual, +16 spaces = 24
 	}
 	rightFiller := pad(24)
 	lines := make([]string, 0, len(leftBlocks))
@@ -383,7 +395,9 @@ func TestDeltaOutput_NoRawTabs_Tripwire(t *testing.T) {
 	// The input fixture (sbs_input.diff) contains literal '\t' indentation,
 	// so a delta that *didn't* expand tabs would surface them here.
 	if strings.ContainsRune(stripped, '\t') {
-		t.Fatalf("delta output unexpectedly contains raw '\\t' — tab expansion is off; selection col math needs revisiting")
+		t.Fatalf(
+			"delta output unexpectedly contains raw '\\t' — tab expansion is off; selection col math needs revisiting",
+		)
 	}
 }
 
@@ -436,7 +450,10 @@ func TestSelection_ColumnClampLeft(t *testing.T) {
 	// SBS-structured line so the clamp applies; without leading '│' the
 	// selection now treats the row as a hunk-header / decoration and skips
 	// side-specific column clamping.
-	m.file = &cachedNode{path: "test", diff: "│  1 │left content                  │  1 │right content"}
+	m.file = &cachedNode{
+		path: "test",
+		diff: "│  1 │left content                  │  1 │right content",
+	}
 
 	m.StartSelection(Point{Line: 0, Col: 10})
 	m.ExtendSelection(Point{Line: 0, Col: 60})
@@ -452,7 +469,10 @@ func TestSelection_ColumnClampLeft(t *testing.T) {
 func TestSelection_ColumnClampRight(t *testing.T) {
 	m := New(true, "auto")
 	m.gutterCol = 40
-	m.file = &cachedNode{path: "test", diff: "│  1 │left content                  │  1 │right content"}
+	m.file = &cachedNode{
+		path: "test",
+		diff: "│  1 │left content                  │  1 │right content",
+	}
 
 	m.StartSelection(Point{Line: 0, Col: 60})
 	m.ExtendSelection(Point{Line: 0, Col: 10})
@@ -868,12 +888,19 @@ func TestSelection_SideBySide_RightHalfFromDeltaFixture(t *testing.T) {
 	// is visually selected.
 	out := m.View()
 	if !strings.Contains(out, "\x1b[7m") {
-		t.Fatalf("expected reverse-video escape in View() after right-side selection, got:\n%s", out)
+		t.Fatalf(
+			"expected reverse-video escape in View() after right-side selection, got:\n%s",
+			out,
+		)
 	}
 
 	text, ok := m.EndSelection()
 	if !ok || text == "" {
-		t.Fatalf("expected non-empty extracted text from right-side selection, got ok=%v text=%q", ok, text)
+		t.Fatalf(
+			"expected non-empty extracted text from right-side selection, got ok=%v text=%q",
+			ok,
+			text,
+		)
 	}
 	if strings.ContainsRune(text, '│') {
 		t.Fatalf("expected no '│' in extracted text, got %q", text)
@@ -1202,11 +1229,17 @@ func TestSelection_UnifiedContentInSBSModeFallsBackToUnifiedBand(t *testing.T) {
 	m, _ = m.Update(diffContentMsg{cacheKey: key, text: unifiedContent, renderID: 1})
 
 	if m.gutterCol != -1 {
-		t.Fatalf("expected gutterCol == -1 for unified content (got %d) — would otherwise split selections in half over empty space",
-			m.gutterCol)
+		t.Fatalf(
+			"expected gutterCol == -1 for unified content (got %d) — would otherwise split selections in half over empty space",
+			m.gutterCol,
+		)
 	}
 	if m.leftContentCol != -1 || m.rightContentCol != -1 {
-		t.Fatalf("expected left/right content cols both -1, got %d/%d", m.leftContentCol, m.rightContentCol)
+		t.Fatalf(
+			"expected left/right content cols both -1, got %d/%d",
+			m.leftContentCol,
+			m.rightContentCol,
+		)
 	}
 
 	// A click "on the right half" must now use the unified band [0, MaxInt),
@@ -1215,7 +1248,11 @@ func TestSelection_UnifiedContentInSBSModeFallsBackToUnifiedBand(t *testing.T) {
 	m.ExtendSelection(Point{Line: 0, Col: 5})
 	text, ok := m.EndSelection()
 	if !ok || text == "" {
-		t.Fatalf("expected non-empty selection when SBS-but-unified content is clicked on the right, got ok=%v text=%q", ok, text)
+		t.Fatalf(
+			"expected non-empty selection when SBS-but-unified content is clicked on the right, got ok=%v text=%q",
+			ok,
+			text,
+		)
 	}
 }
 
@@ -1327,6 +1364,9 @@ func TestView_NoSelectionNoOverlay(t *testing.T) {
 
 	out := m.View()
 	if strings.Contains(out, "\x1b[7m") || strings.Contains(out, "\x1b[27m") {
-		t.Fatalf("expected no SGR-reverse escapes when sel.active==false && sel.has==false, got:\n%q", out)
+		t.Fatalf(
+			"expected no SGR-reverse escapes when sel.active==false && sel.has==false, got:\n%q",
+			out,
+		)
 	}
 }

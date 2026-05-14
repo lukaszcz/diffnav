@@ -50,10 +50,10 @@ func highlightRange(line int, start, end Point, lineWidth int) (int, int) {
 	if start.Line == end.Line {
 		return start.Col, end.Col
 	}
-	switch {
-	case line == start.Line:
+	switch line {
+	case start.Line:
 		return start.Col, lineWidth
-	case line == end.Line:
+	case end.Line:
 		return 0, end.Col
 	default:
 		return 0, lineWidth

@@ -865,7 +865,7 @@ func (m mainModel) viewHeader() string {
 }
 
 func (m mainModel) footerView() string {
-	var baseBg color.Color = common.SelectionColor(common.DarkerSelected, m.isDarkBackground)
+	baseBg := common.SelectionColor(common.DarkerSelected, m.isDarkBackground)
 	var sepColor color.Color = lipgloss.BrightBlack
 	var helpBg color.Color = lipgloss.BrightBlack
 	var helpFg color.Color = lipgloss.NoColor{}
@@ -881,7 +881,11 @@ func (m mainModel) footerView() string {
 	added, deleted := m.diffViewer.RootDiffStats()
 	help := zone.Mark(
 		zoneHelp,
-		base.Background(helpBg).Foreground(helpFg).PaddingLeft(1).PaddingRight(1).Render("F1/? help"),
+		base.Background(helpBg).
+			Foreground(helpFg).
+			PaddingLeft(1).
+			PaddingRight(1).
+			Render("F1/? help"),
 	)
 	stats := filenode.ViewDiffStats(added, deleted, base)
 	parts := []string{files, sep, stats}

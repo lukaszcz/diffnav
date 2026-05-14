@@ -171,7 +171,11 @@ func (m *Model) refreshColumnDetection(content string) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warn("diffviewer: column detection panicked; falling back to unified selection band", "panic", r)
+			log.Warn(
+				"diffviewer: column detection panicked; falling back to unified selection band",
+				"panic",
+				r,
+			)
 			m.gutterCol = -1
 			m.leftContentCol = -1
 			m.rightContentCol = -1
@@ -221,7 +225,11 @@ func (m Model) applyHighlight(vpView string) (out string) {
 	out = vpView
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warn("diffviewer: applyHighlight panicked; rendering unhighlighted view", "panic", r)
+			log.Warn(
+				"diffviewer: applyHighlight panicked; rendering unhighlighted view",
+				"panic",
+				r,
+			)
 			out = vpView
 		}
 	}()
