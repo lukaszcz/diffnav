@@ -461,24 +461,37 @@ func TestEnterOnDirectoryStillToggles(t *testing.T) {
 
 // Diff-scroll keys (ctrl+up/down, pgup/pgdown) must scroll the diff pane
 // without disturbing the file tree, regardless of which panel is active.
+// Also asserts the diff viewport actually moved — guards against the keys
+// being silently dropped before reaching the diff pane.
 func TestDiffScrollKeysDoNotDisturbFileTree(t *testing.T) {
 	cases := []struct {
 		name string
 		key  tea.Key
+		down bool
 	}{
-		{"ctrl+down", tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}},
-		{"ctrl+up", tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}},
-		{"pgdown", tea.Key{Code: tea.KeyPgDown}},
-		{"pgup", tea.Key{Code: tea.KeyPgUp}},
+		{"ctrl+down", tea.Key{Code: tea.KeyDown, Mod: tea.ModCtrl}, true},
+		{"ctrl+up", tea.Key{Code: tea.KeyUp, Mod: tea.ModCtrl}, false},
+		{"pgdown", tea.Key{Code: tea.KeyPgDown}, true},
+		{"pgup", tea.Key{Code: tea.KeyPgUp}, false},
 	}
 	for _, tc := range cases {
 		for _, panel := range []Panel{FileTreePanel, DiffViewerPanel} {
 			t.Run(tc.name+"/panel="+panelName(panel), func(t *testing.T) {
 				m := newTestMainModel(t)
-				m.width = 160
-				m.height = 40
+				m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 160, Height: 40})
 				m.activePanel = panel
+				// Inject scrollable content so the viewport can actually move.
+				m.diffViewer.SetContent(strings.Repeat("line\n", 500))
+				if !tc.down {
+					m.diffViewer.ScrollDown(50)
+					if m.diffViewer.YOffset() == 0 {
+						t.Fatalf(
+							"precondition: expected YOffset>0 after manual ScrollDown, got 0",
+						)
+					}
+				}
 				before := m.fileTree.CurrNodePath()
+				beforeOffset := m.diffViewer.YOffset()
 
 				updated := updateMainModel(t, m, tea.KeyPressMsg(tc.key))
 
@@ -490,6 +503,21 @@ func TestDiffScrollKeysDoNotDisturbFileTree(t *testing.T) {
 						"expected active panel to remain %v, got %v",
 						panel,
 						updated.activePanel,
+					)
+				}
+				afterOffset := updated.diffViewer.YOffset()
+				if tc.down && afterOffset <= beforeOffset {
+					t.Fatalf(
+						"expected diff YOffset to advance from %d, got %d",
+						beforeOffset,
+						afterOffset,
+					)
+				}
+				if !tc.down && afterOffset >= beforeOffset {
+					t.Fatalf(
+						"expected diff YOffset to decrease from %d, got %d",
+						beforeOffset,
+						afterOffset,
 					)
 				}
 			})

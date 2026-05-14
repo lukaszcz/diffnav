@@ -451,6 +451,13 @@ func (m *Model) SetSideBySide(sideBySide bool) tea.Cmd {
 	return m.diff()
 }
 
+// SetContent loads a string directly into the underlying viewport, bypassing
+// the delta render pipeline. Intended for tests that need scrollable content
+// without invoking the external delta binary.
+func (m *Model) SetContent(s string) {
+	m.vp.SetContent(s)
+}
+
 // ScrollUp scrolls the viewport up by the given number of lines.
 func (m *Model) ScrollUp(lines int) {
 	m.vp.ScrollUp(lines)
