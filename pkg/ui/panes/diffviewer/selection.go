@@ -96,8 +96,139 @@ func clampToLine(a, b, lineWidth int) (int, int) {
 // spliceReverse returns line with the visual column range [a, b) wrapped in
 // SGR 7 (reverse video) / SGR 27 (reset). Uses ansi.Cut so ANSI escapes and
 // wide characters are preserved.
+//
+// Mid-chunk SGR resets (e.g. delta's `\x1b[0m`) would otherwise clear our
+// reverse-video attribute and leave the selection invisible after the cell
+// renderer normalizes the output; reapplyReverseAfterResets rewrites the
+// middle so reverse stays asserted across any internal reset.
 func spliceReverse(line string, a, b, lineWidth int) string {
-	return ansi.Cut(line, 0, a) + "\x1b[7m" + ansi.Cut(line, a, b) + "\x1b[27m" + ansi.Cut(line, b, lineWidth)
+	middle := reapplyReverseAfterResets(ansi.Cut(line, a, b))
+	return ansi.Cut(line, 0, a) + "\x1b[7m" + middle + "\x1b[27m" + ansi.Cut(line, b, lineWidth)
+}
+
+// reapplyReverseAfterResets walks s looking for SGR sequences that include
+// parameter 0 (a full reset) or the canonical "disable reverse" 27 code, and
+// appends `\x1b[7m` after each so the surrounding reverse-video span keeps
+// applying to the cells that follow. Non-SGR escapes and SGR sequences that
+// don't reset reverse are left untouched.
+func reapplyReverseAfterResets(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c != 0x1b || i+1 >= len(s) || s[i+1] != '[' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		// Found the start of a CSI sequence: \x1b[<params>m...
+		end := i + 2
+		for end < len(s) {
+			r := s[end]
+			if r == 'm' || (r >= 0x40 && r <= 0x7e) {
+				break
+			}
+			end++
+		}
+		if end >= len(s) {
+			b.WriteString(s[i:])
+			break
+		}
+		seq := s[i : end+1]
+		b.WriteString(seq)
+		if seq[len(seq)-1] == 'm' && sgrClearsReverse(seq[2:len(seq)-1]) {
+			b.WriteString("\x1b[7m")
+		}
+		i = end + 1
+	}
+	return b.String()
+}
+
+// sgrClearsReverse returns true when an SGR parameter list — i.e. the bytes
+// between `\x1b[` and `m` — would clear the reverse-video attribute. The
+// empty list (`\x1b[m`) and any list containing a `0` or `27` parameter both
+// reset reverse and need a re-assert afterwards.
+func sgrClearsReverse(params string) bool {
+	if params == "" {
+		return true
+	}
+	for _, p := range strings.Split(params, ";") {
+		switch strings.TrimSpace(p) {
+		case "", "0", "27":
+			return true
+		}
+	}
+	return false
+}
+
+// Delta's default line-continuation glyphs. We strip these from extracted
+// text and, for the wrap symbols, fold the next physical line into the
+// current logical one.
+const (
+	wrapLeftSymbol        = "↵" // ↵   wrap-left-symbol (end-of-line continuation)
+	wrapRightSymbol       = "↴" // ↴   wrap-right-symbol (right-aligned wrap continuation)
+	wrapRightPrefixSymbol = "…" // …   wrap-right-prefix-symbol (continuation prefix)
+	truncationSymbol      = "→" // →   end-of-line truncation indicator
+)
+
+// joinWrappedLines folds delta-rendered line continuations back into single
+// logical lines. Input is a slice of ANSI-stripped row substrings (one per
+// physical viewport row in the selection); output is the joined plaintext.
+//
+// Rules:
+//   - Trailing '↵' / '↴' on a row mean "continues on next row" — the glyph is
+//     stripped and no newline is emitted between this row and the next.
+//   - Trailing '→' means "truncated at the row edge but the logical line is
+//     done here" — strip the glyph, emit a newline.
+//   - The row *immediately following* a wrap glyph is a continuation. Strip
+//     any leading whitespace + '…' (delta's right-aligned wrap prefix) before
+//     appending so the join reads as one logical line instead of e.g.
+//     "abc                 …def".
+func joinWrappedLines(rows []string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	continuing := false
+	for i, row := range rows {
+		if continuing {
+			row = stripContinuationPrefix(row)
+		}
+		joinNext := false
+		switch {
+		case strings.HasSuffix(row, wrapLeftSymbol):
+			row = strings.TrimSuffix(row, wrapLeftSymbol)
+			joinNext = true
+		case strings.HasSuffix(row, wrapRightSymbol):
+			row = strings.TrimSuffix(row, wrapRightSymbol)
+			joinNext = true
+		case strings.HasSuffix(row, truncationSymbol):
+			row = strings.TrimSuffix(row, truncationSymbol)
+		}
+		b.WriteString(row)
+		if i < len(rows)-1 && !joinNext {
+			b.WriteByte('\n')
+		}
+		continuing = joinNext
+	}
+	return b.String()
+}
+
+// stripContinuationPrefix removes the leading whitespace and optional '…'
+// glyph that delta inserts when right-aligning a wrapped fragment. Returns
+// the row unchanged if no continuation prefix is present.
+func stripContinuationPrefix(row string) string {
+	trimmed := strings.TrimLeft(row, " \t")
+	if rest, ok := strings.CutPrefix(trimmed, wrapRightPrefixSymbol); ok {
+		return rest
+	}
+	// Plain left-aligned wrap: no '…' to strip and the leading whitespace
+	// is real indentation belonging to the wrapped content — keep it.
+	return row
 }
 
 // visualColumnsOf walks s rune-by-rune accumulating runewidth.RuneWidth and
@@ -149,6 +280,56 @@ func detectGutterCol(stripped string, paneWidth int) int {
 		counts[best]++
 	}
 	return modeOrFallback(counts, fallback)
+}
+
+// detectSideContentCols finds the first visual column of the content area on
+// each side of a side-by-side render — i.e. the column just past the
+// post-line-number "│" border. Returns (-1, -1) when nothing matches.
+//
+// For each content line (≥4 occurrences of '│') it picks:
+//   - leftPostLN  = the rightmost '│' strictly before gutterCol
+//   - rightPostLN = the leftmost '│' strictly after gutterCol
+//
+// and returns (leftPostLN+1, rightPostLN+1) as the mode across content lines.
+// gutterCol must already have been resolved via [detectGutterCol].
+func detectSideContentCols(stripped string, gutterCol int) (int, int) {
+	if gutterCol <= 0 {
+		return -1, -1
+	}
+	leftCounts := map[int]int{}
+	rightCounts := map[int]int{}
+	for _, raw := range firstNContentLines(stripped, 10) {
+		positions := visualColumnsOf(raw, '│')
+		if len(positions) < 4 {
+			continue
+		}
+		leftPostLN := -1
+		rightPostLN := -1
+		for _, p := range positions {
+			switch {
+			case p > 0 && p < gutterCol:
+				if p > leftPostLN {
+					leftPostLN = p
+				}
+			case p > gutterCol:
+				if rightPostLN == -1 || p < rightPostLN {
+					rightPostLN = p
+				}
+			}
+		}
+		if leftPostLN > 0 {
+			leftCounts[leftPostLN]++
+		}
+		if rightPostLN > 0 {
+			rightCounts[rightPostLN]++
+		}
+	}
+	left := modeOrFallback(leftCounts, -1)
+	right := modeOrFallback(rightCounts, -1)
+	if left < 0 || right < 0 {
+		return -1, -1
+	}
+	return left + 1, right + 1
 }
 
 // firstNContentLines returns up to n non-empty lines from stripped, split on

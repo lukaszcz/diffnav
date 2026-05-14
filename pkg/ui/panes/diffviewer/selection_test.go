@@ -433,6 +433,10 @@ func TestDetectGutterCol_HunkHeaderRobustness(t *testing.T) {
 func TestSelection_ColumnClampLeft(t *testing.T) {
 	m := New(true, "auto")
 	m.gutterCol = 40
+	// SBS-structured line so the clamp applies; without leading '│' the
+	// selection now treats the row as a hunk-header / decoration and skips
+	// side-specific column clamping.
+	m.file = &cachedNode{path: "test", diff: "│  1 │left content                  │  1 │right content"}
 
 	m.StartSelection(Point{Line: 0, Col: 10})
 	m.ExtendSelection(Point{Line: 0, Col: 60})
@@ -448,6 +452,7 @@ func TestSelection_ColumnClampLeft(t *testing.T) {
 func TestSelection_ColumnClampRight(t *testing.T) {
 	m := New(true, "auto")
 	m.gutterCol = 40
+	m.file = &cachedNode{path: "test", diff: "│  1 │left content                  │  1 │right content"}
 
 	m.StartSelection(Point{Line: 0, Col: 60})
 	m.ExtendSelection(Point{Line: 0, Col: 10})
@@ -465,20 +470,26 @@ func TestSelection_LeftColumnExtractionExcludesGutterAndRight(t *testing.T) {
 	m.vp.SetWidth(70)
 	m.vp.SetHeight(10)
 	m.gutterCol = 30
+	m.leftContentCol = 6
+	m.rightContentCol = 36
 
-	// Synthetic side-by-side content: left half (cols 0..29) carries
-	// readable, '│'-free text; the center '│' sits at col 30; the right
-	// half (cols 31..) is filled with distinct tokens we can search for.
+	// Synthetic side-by-side content with realistic layout:
+	//   col 0:  '│'         leading border
+	//   col 1-4 '  1 '      line number
+	//   col 5:  '│'         post-line-number border
+	//   col 6+: left content (up to gutter at col 30)
+	//   col 30: '│'         center divider
+	//   col 31-34 '  1 '    right line number
+	//   col 35: '│'         post-line-number border
+	//   col 36+: right content tokens
 	lines := []string{
-		"alpha leftcol content here   " + " │" + "BETA-RIGHT-LINE-ZERO          ",
-		"gamma leftcol content here   " + " │" + "DELTA-RIGHT-LINE-ONE          ",
-		"epsilon leftcol content here " + " │" + "ZETA-RIGHT-LINE-TWO           ",
+		"│  1 │alpha leftcol content   │  1 │BETA-RIGHT-LINE-ZERO  ",
+		"│  2 │gamma leftcol content   │  2 │DELTA-RIGHT-LINE-ONE  ",
+		"│  3 │epsilon leftcol content │  3 │ZETA-RIGHT-LINE-TWO   ",
 	}
-	// Sanity-check the construction: each left half is exactly 30 visual
-	// columns, putting the center '│' at col 30.
 	for i, ln := range lines {
 		positions := visualColumnsOf(ln, '│')
-		if len(positions) == 0 || positions[0] != 30 {
+		if !containsCol(positions, 30) {
 			t.Fatalf("line %d: expected '│' at col 30, positions=%v line=%q", i, positions, ln)
 		}
 	}
@@ -550,7 +561,8 @@ func TestSelection_ModeToggleResetsGutterCol(t *testing.T) {
 	sbsContent := strings.Repeat(sbsLine+"\n", 4)
 
 	sbsKey := cacheKey("/", true)
-	m.cache[sbsKey] = &cachedNode{path: "/"}
+	m.dir = &cachedNode{path: "/"}
+	m.cache[sbsKey] = m.dir
 	m.renderID = 1
 	m, _ = m.Update(diffContentMsg{
 		cacheKey: sbsKey,
@@ -601,6 +613,570 @@ func TestSelection_ModeToggleResetsGutterCol(t *testing.T) {
 	if m.sel.head.Col != 50 {
 		t.Fatalf("expected head.Col == 50 (no clamp), got %d", m.sel.head.Col)
 	}
+}
+
+// (17) detectSideContentCols on the delta side-by-side fixture: the returned
+// (leftContentCol, rightContentCol) must sit just past each side's post-LN
+// '│' border, so a selection clamped to them excludes the line-number column.
+func TestDetectSideContentCols_DeltaFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sbs_render_w120.ansi"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	stripped := ansi.Strip(string(raw))
+	gutter := detectGutterCol(stripped, 120)
+
+	left, right := detectSideContentCols(stripped, gutter)
+	if left <= 0 || left >= gutter {
+		t.Fatalf("leftContentCol out of range: got %d, want in (0, %d)", left, gutter)
+	}
+	if right <= gutter {
+		t.Fatalf("rightContentCol must be > gutterCol(%d), got %d", gutter, right)
+	}
+	// Each detected column must point to a content position whose preceding
+	// column carries '│' (i.e. the post-LN border).
+	for _, ln := range firstNContentLines(stripped, 5) {
+		positions := visualColumnsOf(ln, '│')
+		if len(positions) < 4 {
+			continue
+		}
+		if !containsCol(positions, left-1) {
+			t.Fatalf("expected '│' at col %d in content line %q (positions=%v)",
+				left-1, ln, positions)
+		}
+		if !containsCol(positions, right-1) {
+			t.Fatalf("expected '│' at col %d in content line %q (positions=%v)",
+				right-1, ln, positions)
+		}
+	}
+}
+
+func containsCol(positions []int, target int) bool {
+	for _, p := range positions {
+		if p == target {
+			return true
+		}
+	}
+	return false
+}
+
+// (18) Side-by-side LEFT selection excludes leading border, line number, and
+// post-LN '│' border. The extracted text contains the content tokens and none
+// of the structural characters.
+func TestSelection_SideBySide_LeftExcludesLineNumbersAndBorders(t *testing.T) {
+	m := New(true, "auto")
+	m.vp.SetWidth(80)
+	m.vp.SetHeight(10)
+	// Layout per line: "│" + "  1 " + "│" + LEFT(24) + "│" + "  1 " + "│" + RIGHT(24)
+	//   col 0:  '│'
+	//   col 5:  '│' (left post-LN)
+	//   col 30: '│' (gutter / center divider)
+	//   col 35: '│' (right post-LN)
+	lines := []string{
+		"│" + "  1 " + "│" + "alpha-left-content      " + "│" + "  1 " + "│" + "alpha-right-content     ",
+		"│" + "  2 " + "│" + "beta-left-content       " + "│" + "  2 " + "│" + "beta-right-content      ",
+		"│" + "  3 " + "│" + "gamma-left-content      " + "│" + "  3 " + "│" + "gamma-right-content     ",
+	}
+	content := strings.Join(lines, "\n")
+	m.file = &cachedNode{path: "test", diff: content}
+	m.gutterCol = 30
+	m.leftContentCol = 6
+	m.rightContentCol = 36
+
+	// Click on the leading-border column; the band should still snap to col 6.
+	m.StartSelection(Point{Line: 0, Col: 0})
+	m.ExtendSelection(Point{Line: 2, Col: 29})
+
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if strings.ContainsRune(text, '│') {
+		t.Fatalf("expected no '│' in extracted text, got %q", text)
+	}
+	for _, num := range []string{" 1 ", " 2 ", " 3 "} {
+		if strings.Contains(text, num) {
+			t.Fatalf("expected no line-number token %q in extracted text, got %q", num, text)
+		}
+	}
+	for _, tok := range []string{"alpha-left-content", "beta-left-content", "gamma-left-content"} {
+		if !strings.Contains(text, tok) {
+			t.Fatalf("expected text to contain %q, got %q", tok, text)
+		}
+	}
+	for _, tok := range []string{"alpha-right-content", "beta-right-content", "gamma-right-content"} {
+		if strings.Contains(text, tok) {
+			t.Fatalf("expected text to exclude right-side token %q, got %q", tok, text)
+		}
+	}
+}
+
+// (19) Side-by-side RIGHT selection excludes center divider, right line
+// number, and the post-LN '│'.
+func TestSelection_SideBySide_RightExcludesLineNumbersAndBorders(t *testing.T) {
+	m := New(true, "auto")
+	m.vp.SetWidth(80)
+	m.vp.SetHeight(10)
+	lines := []string{
+		"│" + "  1 " + "│" + "alpha-left-content      " + "│" + "  1 " + "│" + "alpha-right-content     ",
+		"│" + "  2 " + "│" + "beta-left-content       " + "│" + "  2 " + "│" + "beta-right-content      ",
+		"│" + "  3 " + "│" + "gamma-left-content      " + "│" + "  3 " + "│" + "gamma-right-content     ",
+	}
+	content := strings.Join(lines, "\n")
+	m.file = &cachedNode{path: "test", diff: content}
+	m.gutterCol = 30
+	m.leftContentCol = 6
+	m.rightContentCol = 36
+
+	// Click on the right line-number column (col 32). The band should snap to
+	// rightContentCol=36 and the drag must stay there even when extended back
+	// toward the gutter.
+	m.StartSelection(Point{Line: 0, Col: 32})
+	if m.sel.anchor.Col != 36 {
+		t.Fatalf("expected anchor.Col=36 after clamp, got %d", m.sel.anchor.Col)
+	}
+	m.ExtendSelection(Point{Line: 2, Col: 200})
+
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if strings.ContainsRune(text, '│') {
+		t.Fatalf("expected no '│' in extracted text, got %q", text)
+	}
+	for _, num := range []string{" 1 ", " 2 ", " 3 "} {
+		if strings.Contains(text, num) {
+			t.Fatalf("expected no line-number token %q in extracted text, got %q", num, text)
+		}
+	}
+	for _, tok := range []string{"alpha-right-content", "beta-right-content", "gamma-right-content"} {
+		if !strings.Contains(text, tok) {
+			t.Fatalf("expected text to contain %q, got %q", tok, text)
+		}
+	}
+	for _, tok := range []string{"alpha-left-content", "beta-left-content", "gamma-left-content"} {
+		if strings.Contains(text, tok) {
+			t.Fatalf("expected text to exclude left-side token %q, got %q", tok, text)
+		}
+	}
+}
+
+// (20) End-to-end through Update: feeding a side-by-side diffContentMsg
+// populates leftContentCol/rightContentCol so a subsequent left-side
+// selection excludes the line-number column.
+func TestSelection_SideBySideUpdateDetectsContentCols(t *testing.T) {
+	m := New(true, "dark")
+	// Viewport width 60 with each side ~30 cols wide puts the center divider
+	// at col 30, matching width/2 so detectGutterCol picks it.
+	m.vp.SetWidth(60)
+	m.vp.SetHeight(10)
+
+	pad := func(s string, w int) string {
+		if len(s) >= w {
+			return s[:w]
+		}
+		return s + strings.Repeat(" ", w-len(s))
+	}
+	// Layout: "│" + "  1 " + "│" + LEFT(24) + "│" + "  1 " + "│" + RIGHT(24)
+	// Pipes at cols 0, 5, 30, 35.
+	line := func(ln string, rn string) string {
+		return "│" + "  1 " + "│" + pad(ln, 24) + "│" + "  1 " + "│" + pad(rn, 24)
+	}
+	sbsContent := strings.Join([]string{
+		line("alpha-left", "alpha-right"),
+		line("beta-left", "beta-right"),
+		line("gamma-left", "gamma-right"),
+	}, "\n")
+
+	key := cacheKey("/", true)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[key] = m.dir
+	m.renderID = 1
+	m, _ = m.Update(diffContentMsg{cacheKey: key, text: sbsContent, renderID: 1})
+
+	if m.leftContentCol <= 0 || m.leftContentCol >= m.gutterCol {
+		t.Fatalf("leftContentCol=%d not in (0, gutterCol=%d)", m.leftContentCol, m.gutterCol)
+	}
+	if m.rightContentCol <= m.gutterCol {
+		t.Fatalf("rightContentCol=%d not > gutterCol=%d", m.rightContentCol, m.gutterCol)
+	}
+
+	// Click on the leading border and drag past the gutter; selection must
+	// land entirely in the left content area, free of '│' and line numbers.
+	m.StartSelection(Point{Line: 0, Col: 0})
+	m.ExtendSelection(Point{Line: 2, Col: 200})
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if strings.ContainsRune(text, '│') {
+		t.Fatalf("expected no '│' in extracted text, got %q", text)
+	}
+	if !strings.Contains(text, "alpha-left") || !strings.Contains(text, "gamma-left") {
+		t.Fatalf("expected left content tokens in text, got %q", text)
+	}
+	if strings.Contains(text, "alpha-right") {
+		t.Fatalf("expected no right content token in text, got %q", text)
+	}
+}
+
+// (21) End-to-end: feed the real delta side-by-side fixture through Update
+// and assert that a click on the right half produces a non-empty highlight
+// AND a non-empty extracted text — the production failure mode the user
+// reported.
+func TestSelection_SideBySide_RightHalfFromDeltaFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sbs_render_w120.ansi"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	m := New(true, "dark")
+	m.vp.SetWidth(120)
+	m.vp.SetHeight(20)
+
+	key := cacheKey("/", true)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[key] = m.dir
+	m.renderID = 1
+	m, _ = m.Update(diffContentMsg{cacheKey: key, text: string(raw), renderID: 1})
+
+	if m.gutterCol <= 0 {
+		t.Fatalf("expected gutterCol > 0, got %d", m.gutterCol)
+	}
+	if m.rightContentCol <= m.gutterCol {
+		t.Fatalf("rightContentCol=%d must be > gutterCol=%d", m.rightContentCol, m.gutterCol)
+	}
+
+	// Pick a content line — first row in the cached diff with ≥4 pipes — and
+	// click somewhere inside the right half of that line.
+	cachedLines := strings.Split(m.dir.diff, "\n")
+	contentLine := -1
+	for i, ln := range cachedLines {
+		if len(visualColumnsOf(ansi.Strip(ln), '│')) >= 4 {
+			contentLine = i
+			break
+		}
+	}
+	if contentLine < 0 {
+		t.Fatalf("no content line with ≥4 pipes found in cached diff")
+	}
+
+	rightClickCol := m.rightContentCol + 2 // a couple cols into the right content
+	m.StartSelection(Point{Line: contentLine, Col: rightClickCol})
+	m.ExtendSelection(Point{Line: contentLine, Col: rightClickCol + 6})
+
+	// View() must contain a reverse-video escape — without one, nothing
+	// is visually selected.
+	out := m.View()
+	if !strings.Contains(out, "\x1b[7m") {
+		t.Fatalf("expected reverse-video escape in View() after right-side selection, got:\n%s", out)
+	}
+
+	text, ok := m.EndSelection()
+	if !ok || text == "" {
+		t.Fatalf("expected non-empty extracted text from right-side selection, got ok=%v text=%q", ok, text)
+	}
+	if strings.ContainsRune(text, '│') {
+		t.Fatalf("expected no '│' in extracted text, got %q", text)
+	}
+}
+
+// (22) joinWrappedLines pure-logic tests covering all 4 glyph cases.
+func TestJoinWrappedLines_Symbols(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{
+			name: "no symbols passes through with newlines",
+			in:   []string{"first", "second", "third"},
+			want: "first\nsecond\nthird",
+		},
+		{
+			name: "trailing ↵ folds next row",
+			in:   []string{"var s = \"this is a very long stri↵", "ng continues here"},
+			want: "var s = \"this is a very long string continues here",
+		},
+		{
+			name: "trailing ↵ on multiple rows folds them all",
+			in:   []string{"aaa↵", "bbb↵", "ccc"},
+			want: "aaabbbccc",
+		},
+		{
+			name: "trailing → keeps newline (truncation, not continuation)",
+			in:   []string{"long content cut→", "next logical line"},
+			want: "long content cut\nnext logical line",
+		},
+		{
+			name: "trailing ↴ folds like ↵",
+			in:   []string{"abc↴", "def"},
+			want: "abcdef",
+		},
+		{
+			name: "leading … stripped before joining",
+			in:   []string{"begin↵", "…end"},
+			want: "beginend",
+		},
+		{
+			name: "leading whitespace + … (right-aligned wrap) stripped",
+			in:   []string{"longish-content-that-wraps↵", "                          …rest"},
+			want: "longish-content-that-wrapsrest",
+		},
+		{
+			name: "plain left-aligned wrap keeps content whitespace",
+			in:   []string{"foo()↵", "  return bar"},
+			want: "foo()  return bar",
+		},
+		{
+			name: "standalone … is not a continuation, leave alone",
+			in:   []string{"…explicit ellipsis content"},
+			want: "…explicit ellipsis content",
+		},
+		{
+			name: "mixed wrap and truncation",
+			in:   []string{"first↵", "wrap-cont→", "third"},
+			want: "firstwrap-cont\nthird",
+		},
+		{
+			name: "empty rows preserved",
+			in:   []string{"a", "", "b"},
+			want: "a\n\nb",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := joinWrappedLines(tc.in)
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// (23) Integration: a selection spanning wrapped rows from delta-formatted
+// content yields a single logical line in the extracted text.
+func TestSelection_StripsWrapSymbolsOnExtract(t *testing.T) {
+	m := New(true, "auto")
+	m.vp.SetWidth(80)
+	m.vp.SetHeight(10)
+	m.gutterCol = 30
+	m.leftContentCol = 6
+	m.rightContentCol = 36
+
+	// Three physical rows, all left-side content, where the first two end in
+	// '↵' to indicate wrap and the third terminates normally. The left
+	// content area is 24 visual cols wide (cols 6..29), so wrap symbols at
+	// col 29 fall inside the [leftContentCol=6, gutterCol=30) band.
+	row := func(left string) string {
+		// `left` must already be 24 visual cols wide (ASCII + a single-width
+		// glyph like '↵' both count as 1 visual col).
+		return "│" + "  1 " + "│" + left + "│" + "  1 " + "│" + "right-side-fill        "
+	}
+	lines := []string{
+		row("var s = first-fragment-↵"),
+		row("then-middle-fragment-x-↵"),
+		row("then-final-fragment.    "),
+	}
+	m.file = &cachedNode{path: "test", diff: strings.Join(lines, "\n")}
+
+	m.StartSelection(Point{Line: 0, Col: 6})
+	m.ExtendSelection(Point{Line: 2, Col: 29})
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if strings.Contains(text, "↵") {
+		t.Fatalf("expected ↵ stripped, got %q", text)
+	}
+	if strings.Count(text, "\n") != 0 {
+		t.Fatalf("expected wrapped rows joined to one line, got %q", text)
+	}
+	want := "var s = first-fragment-then-middle-fragment-x-then-final-fragment."
+	if !strings.Contains(text, want) {
+		t.Fatalf("expected joined text to contain %q, got %q", want, text)
+	}
+}
+
+// (24) Cross-mode cache reuse: after rendering a file in unified mode (which
+// resets gutterCol=-1) and then re-rendering it side-by-side from a cached
+// payload, the side-by-side columns must be re-detected. Without this fix the
+// right-side band logic would treat every click as "unified mode, no clamp",
+// hiding line-numbered selections and feeling like the right half doesn't
+// respond to drags in some configurations.
+func TestSelection_CachedSideBySideRedetectsColumns(t *testing.T) {
+	m := New(true, "dark")
+	m.vp.SetWidth(60)
+	m.vp.SetHeight(10)
+
+	pad := func(n int) string { return strings.Repeat(" ", n) }
+	sbsLine := "│" + "  1 " + "│" + pad(24) + "│" + "  1 " + "│" + pad(24)
+	sbsContent := strings.Repeat(sbsLine+"\n", 4)
+
+	// Render once via diffContentMsg to populate the cache.
+	key := cacheKey("/", true)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[key] = m.dir
+	m.renderID = 1
+	m, _ = m.Update(diffContentMsg{cacheKey: key, text: sbsContent, renderID: 1})
+
+	gutter := m.gutterCol
+	leftCol := m.leftContentCol
+	rightCol := m.rightContentCol
+	if gutter <= 0 || leftCol <= 0 || rightCol <= gutter {
+		t.Fatalf("initial detection bad: gutter=%d left=%d right=%d", gutter, leftCol, rightCol)
+	}
+
+	// Simulate a mode toggle to unified that resets the detection metadata.
+	m.gutterCol = -1
+	m.leftContentCol = -1
+	m.rightContentCol = -1
+
+	// Now load the same path again — cache hit. Detection must refresh.
+	files := []*gitdiff.File{}
+	m, _ = m.SetDirPatch("/", files)
+	if m.gutterCol != gutter || m.leftContentCol != leftCol || m.rightContentCol != rightCol {
+		t.Fatalf("cache-hit failed to refresh columns: gutter=%d left=%d right=%d (want %d/%d/%d)",
+			m.gutterCol, m.leftContentCol, m.rightContentCol, gutter, leftCol, rightCol)
+	}
+}
+
+// (25) Unified content rendered while m.sideBySide==true (delta forces
+// unified for new/deleted files): detection must NOT pin gutterCol at the
+// vpWidth/2 fallback — otherwise the right-side selection band points into
+// empty space past the actual line widths and "the right side doesn't work".
+func TestSelection_UnifiedContentInSBSModeFallsBackToUnifiedBand(t *testing.T) {
+	m := New(true, "dark")
+	m.vp.SetWidth(80)
+	m.vp.SetHeight(10)
+
+	// Unified delta output: plain content without side-by-side structure.
+	unifiedContent := strings.Join([]string{
+		"package main",
+		"",
+		"func main() {}",
+		"  return",
+	}, "\n")
+
+	key := cacheKey("/", true)
+	m.dir = &cachedNode{path: "/"}
+	m.cache[key] = m.dir
+	m.renderID = 1
+	m, _ = m.Update(diffContentMsg{cacheKey: key, text: unifiedContent, renderID: 1})
+
+	if m.gutterCol != -1 {
+		t.Fatalf("expected gutterCol == -1 for unified content (got %d) — would otherwise split selections in half over empty space",
+			m.gutterCol)
+	}
+	if m.leftContentCol != -1 || m.rightContentCol != -1 {
+		t.Fatalf("expected left/right content cols both -1, got %d/%d", m.leftContentCol, m.rightContentCol)
+	}
+
+	// A click "on the right half" must now use the unified band [0, MaxInt),
+	// extracting the full visible content.
+	m.StartSelection(Point{Line: 0, Col: 50})
+	m.ExtendSelection(Point{Line: 0, Col: 5})
+	text, ok := m.EndSelection()
+	if !ok || text == "" {
+		t.Fatalf("expected non-empty selection when SBS-but-unified content is clicked on the right, got ok=%v text=%q", ok, text)
+	}
+}
+
+// (26) Click on a hunk-header line ("60: struct Foo { │") must NOT apply the
+// SBS side-band clamp — otherwise the leading "60: " prefix becomes
+// unselectable. The line lacks the leading '│' that marks an SBS content
+// row, so StartSelection should fall back to the unified [0, MaxInt) band.
+func TestSelection_HunkHeaderUsesUnifiedBand(t *testing.T) {
+	m := New(true, "dark")
+	m.vp.SetWidth(80)
+	m.vp.SetHeight(10)
+	m.gutterCol = 40
+	m.leftContentCol = 6
+	m.rightContentCol = 46
+
+	hunkHeader := "60: struct Foo {                       │"
+	sbsRow := "│  1 │left side content                │  1 │right side content"
+	m.file = &cachedNode{path: "test", diff: hunkHeader + "\n" + sbsRow}
+
+	// Click on "struct" inside the hunk header (col 4).
+	m.StartSelection(Point{Line: 0, Col: 4})
+	if m.sel.colBand[0] != 0 {
+		t.Fatalf("expected unified band lo=0 on hunk-header line, got %v", m.sel.colBand)
+	}
+	if m.sel.anchor.Col != 4 {
+		t.Fatalf("expected anchor.Col=4 (no clamp on hunk header), got %d", m.sel.anchor.Col)
+	}
+	m.ExtendSelection(Point{Line: 0, Col: 16})
+
+	text, ok := m.EndSelection()
+	if !ok {
+		t.Fatalf("expected EndSelection ok=true")
+	}
+	if !strings.Contains(text, "struct Foo {") {
+		t.Fatalf("expected hunk-header content 'struct Foo {' in extracted text, got %q", text)
+	}
+
+	// And a click on the SBS row below still clamps as before.
+	m.StartSelection(Point{Line: 1, Col: 10})
+	if m.sel.colBand[0] != 6 || m.sel.colBand[1] != 40 {
+		t.Fatalf("expected SBS left band [6,40) on row 1, got %v", m.sel.colBand)
+	}
+}
+
+// (27) Robustness: garbled or unfamiliar delta output (zero pipes, weird
+// glyphs, line widths far outside the expected layout) must not crash the
+// TUI. Detection should land at -1 columns and selection should fall back
+// to the unified band so the user can still drag, even if line-number
+// exclusion no longer applies.
+func TestSelection_GarbledDeltaOutputFallsBackToUnified(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{name: "no pipes at all", content: "just text\nmore text\nno divider markers anywhere"},
+		{name: "wrong divider char", content: "║  1 ║left║  1 ║right\n║  2 ║left║  2 ║right"},
+		{name: "implausibly wide gutter", content: strings.Repeat("│", 200)},
+		{name: "binary-ish garbage", content: "\x00\x01\x02\x03\x04\x05"},
+		{name: "empty content", content: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(true, "dark")
+			m.vp.SetWidth(80)
+			m.vp.SetHeight(10)
+			key := cacheKey("/", true)
+			m.dir = &cachedNode{path: "/"}
+			m.cache[key] = m.dir
+			m.renderID = 1
+			// Update must not panic.
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Update panicked on %q content: %v", tc.name, r)
+				}
+			}()
+			m, _ = m.Update(diffContentMsg{cacheKey: key, text: tc.content, renderID: 1})
+			if m.gutterCol != -1 || m.leftContentCol != -1 || m.rightContentCol != -1 {
+				t.Fatalf("expected all columns at -1 on unparseable content, got g=%d l=%d r=%d",
+					m.gutterCol, m.leftContentCol, m.rightContentCol)
+			}
+
+			// Selection still functions in unified mode.
+			m.StartSelection(Point{Line: 0, Col: 0})
+			m.ExtendSelection(Point{Line: 0, Col: 5})
+			if _, err := safeEndSelection(&m); err != nil {
+				t.Fatalf("EndSelection panicked on %q content: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func safeEndSelection(m *Model) (text string, recovered any) {
+	defer func() {
+		if r := recover(); r != nil {
+			recovered = r
+		}
+	}()
+	t, _ := m.EndSelection()
+	return t, nil
 }
 
 // View() returns the original viewport output unchanged when no selection

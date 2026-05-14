@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"charm.land/log/v2"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/charmbracelet/x/ansi"
 
@@ -60,6 +61,12 @@ type Model struct {
 	// gutterCol is the visual column of the side-by-side center divider.
 	// -1 means "no column constraint" (unified mode or not yet detected).
 	gutterCol int
+	// leftContentCol / rightContentCol are the first visual column inside
+	// each side's content area (i.e. just past the post-line-number "│"
+	// border). -1 means "undetected" — selections then fall back to the
+	// full half band starting at 0 / gutterCol+1.
+	leftContentCol  int
+	rightContentCol int
 }
 
 // SetPreamble stores the preamble text (e.g. commit metadata from git show).
@@ -77,11 +84,13 @@ const (
 
 func New(sideBySide bool, theme string) Model {
 	m := Model{
-		vp:         viewport.Model{},
-		sideBySide: sideBySide,
-		cache:      map[string]*cachedNode{},
-		themeMode:  parseThemeMode(theme),
-		gutterCol:  -1,
+		vp:              viewport.Model{},
+		sideBySide:      sideBySide,
+		cache:           map[string]*cachedNode{},
+		themeMode:       parseThemeMode(theme),
+		gutterCol:       -1,
+		leftContentCol:  -1,
+		rightContentCol: -1,
 	}
 	switch m.themeMode {
 	case themeLight:
@@ -133,14 +142,60 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cache[msg.cacheKey].diff = diff
 		}
 		m.vp.SetContent(diff)
-		// Reset first so a side-by-side → unified toggle drops the stale divider.
-		m.gutterCol = -1
-		if m.sideBySide {
-			m.gutterCol = detectGutterCol(ansi.Strip(diff), m.vp.Width())
-		}
+		m.refreshColumnDetection(diff)
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// refreshColumnDetection re-runs gutter and per-side content column detection
+// on the supplied diff content (typically the freshly rendered or cached
+// payload). Keeping this in one place ensures every code path that swaps the
+// viewport content also refreshes the selection bands — without this, loading
+// a cached file or toggling between unified and side-by-side via cached
+// content would leave stale column metadata in place and make the right side
+// effectively unselectable.
+//
+// All three values stay at -1 unless we can detect *both* a gutter divider
+// AND the post-line-number borders on each side. Delta renders new/deleted
+// files as unified even when --side-by-side is requested, which would
+// otherwise leave gutterCol stuck at the vpWidth/2 fallback and split every
+// selection in half over empty space.
+//
+// Robustness: a defer/recover guard wraps the parse so a future delta layout
+// change can't crash the whole TUI — on any panic we leave the columns at
+// -1 and the selection falls back to the unified [0, MaxInt) band.
+func (m *Model) refreshColumnDetection(content string) {
+	m.gutterCol = -1
+	m.leftContentCol = -1
+	m.rightContentCol = -1
+	if !m.sideBySide || m.vp.Width() <= 0 {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn("diffviewer: column detection panicked; falling back to unified selection band", "panic", r)
+			m.gutterCol = -1
+			m.leftContentCol = -1
+			m.rightContentCol = -1
+		}
+	}()
+	stripped := ansi.Strip(content)
+	g := detectGutterCol(stripped, m.vp.Width())
+	l, r := detectSideContentCols(stripped, g)
+	// Strict plausibility check — beyond the obvious negative-value guards,
+	// reject any layout where the detected columns don't form a coherent
+	// (leadingBorder=0 < leftContent < gutter < rightContent < vpWidth)
+	// sequence. Anything outside that window means delta produced something
+	// we don't understand; treat it as "unparseable" rather than risk
+	// clamping selections to nonsense ranges.
+	w := m.vp.Width()
+	if g <= 0 || g >= w || l <= 0 || l >= g || r <= g || r >= w {
+		return
+	}
+	m.gutterCol = g
+	m.leftContentCol = l
+	m.rightContentCol = r
 }
 
 const scrollbarWidth = 3 // 1 space + 1 scrollbar character + 1 padding
@@ -160,7 +215,19 @@ func (m Model) View() string {
 // applyHighlight overlays SGR-reverse video on the visible viewport rows that
 // fall inside the active or finalized selection. Returns the input unchanged
 // when the selection is fully off-screen.
-func (m Model) applyHighlight(vpView string) string {
+//
+// A defer/recover guard protects the live render path from any panic that a
+// malformed line or unexpected delta output could trigger inside the slice
+// and ansi.Cut operations below — on failure the unhighlighted view is
+// returned so the TUI keeps working.
+func (m Model) applyHighlight(vpView string) (out string) {
+	out = vpView
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn("diffviewer: applyHighlight panicked; rendering unhighlighted view", "panic", r)
+			out = vpView
+		}
+	}()
 	start, end := m.sel.normalized()
 	top := m.vp.YOffset()
 	bottom := top + m.vp.Height()
@@ -221,6 +288,7 @@ func (m *Model) diff() tea.Cmd {
 		if cached, ok := m.cache[key]; ok && cached.diff != "" {
 			m.file = cached
 			m.vp.SetContent(cached.diff)
+			m.refreshColumnDetection(cached.diff)
 			return nil
 		}
 		node := &cachedNode{
@@ -238,6 +306,7 @@ func (m *Model) diff() tea.Cmd {
 		if cached, ok := m.cache[key]; ok && cached.diff != "" {
 			m.dir = cached
 			m.vp.SetContent(cached.diff)
+			m.refreshColumnDetection(cached.diff)
 			return nil
 		}
 		node := &cachedNode{
@@ -319,6 +388,7 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 	if cached, ok := m.cache[key]; ok {
 		m.file = cached
 		m.vp.SetContent(cached.diff)
+		m.refreshColumnDetection(cached.diff)
 		return m, nil
 	}
 
@@ -345,6 +415,7 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 	if cached, ok := m.cache[key]; ok {
 		m.dir = cached
 		m.vp.SetContent(cached.diff)
+		m.refreshColumnDetection(cached.diff)
 		return m, nil
 	}
 
@@ -401,21 +472,42 @@ func (m *Model) YOffset() int {
 }
 
 // StartSelection begins a new selection anchored at p. Derives colBand from
-// p.Col and m.gutterCol per the column-clamping rules in PLAN.md. Sets
-// active=true, has=false. Any prior selection is replaced.
+// p.Col, m.gutterCol, and the detected per-side content columns. The band
+// excludes the leading border, line numbers, and post-LN border on whichever
+// side the click landed.
+//
+// Lines without the standard side-by-side layout — hunk-header boxes
+// ("60: struct …"), filename decorations, separators — opt out of side-
+// specific clamping so the user can select content that lives outside the
+// post-line-number borders. Sets active=true, has=false. Any prior selection
+// is replaced.
 func (m *Model) StartSelection(p Point) {
 	var lo, hi int
+	sbs := m.gutterCol > 0 && m.isSBSContentLine(p.Line)
 	switch {
-	case m.gutterCol < 0:
-		// Unified mode or undetected: no column constraint.
+	case !sbs:
+		// Unified mode, undetected, or click on a non-SBS line (hunk header,
+		// filename decoration, separator): no column constraint.
 		lo, hi = 0, math.MaxInt
-	case p.Col < m.gutterCol:
-		lo, hi = 0, m.gutterCol
 	case p.Col > m.gutterCol:
-		lo, hi = m.gutterCol+1, math.MaxInt
+		lo = m.gutterCol + 1
+		if m.rightContentCol > lo {
+			lo = m.rightContentCol
+		}
+		hi = math.MaxInt
 	default:
-		// p.Col == m.gutterCol — snap left.
-		lo, hi = 0, m.gutterCol
+		// Left side (p.Col < gutterCol) or directly on the divider — snap left.
+		lo = 0
+		if m.leftContentCol > 0 {
+			lo = m.leftContentCol
+		}
+		hi = m.gutterCol
+	}
+	if p.Col < lo {
+		p.Col = lo
+	}
+	if p.Col >= hi {
+		p.Col = hi - 1
 	}
 	m.sel = selection{
 		anchor:  p,
@@ -423,6 +515,31 @@ func (m *Model) StartSelection(p Point) {
 		colBand: [2]int{lo, hi},
 		active:  true,
 	}
+}
+
+// isSBSContentLine reports whether the cached diff line at `line` matches the
+// side-by-side structure (leading "│" border at col 0). Hunk-header boxes,
+// filename decorations, separators, and other delta chrome do not start with
+// "│" and are treated as plain text for selection clamping purposes.
+func (m *Model) isSBSContentLine(line int) bool {
+	if line < 0 {
+		return false
+	}
+	var src string
+	switch {
+	case m.file != nil:
+		src = m.file.diff
+	case m.dir != nil:
+		src = m.dir.diff
+	}
+	if src == "" {
+		return false
+	}
+	lines := strings.Split(src, "\n")
+	if line >= len(lines) {
+		return false
+	}
+	return strings.HasPrefix(ansi.Strip(lines[line]), "│")
 }
 
 // ExtendSelection moves the selection head to p, clamping p.Col into the
@@ -481,10 +598,29 @@ func (m *Model) GutterCol() int {
 	return m.gutterCol
 }
 
+// DebugSelection exposes the current selection's anchor/head/band for tests.
+// Only intended for diagnostics — not part of any public contract.
+func (m *Model) DebugSelection() (anchor, head Point, band [2]int, active bool) {
+	return m.sel.anchor, m.sel.head, m.sel.colBand, m.sel.active
+}
+
 // selectedText extracts the ANSI-stripped plaintext under the current
 // selection from the cached diff content. Returns "" when no content is
 // loaded or the relevant cached node has no diff text.
-func (m *Model) selectedText() string {
+//
+// A defer/recover guard turns any unexpected panic in the ANSI-cut path
+// into an empty result rather than crashing the TUI on clipboard copy.
+func (m *Model) selectedText() (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn("diffviewer: selectedText panicked; copying empty string", "panic", r)
+			result = ""
+		}
+	}()
+	return m.selectedTextInner()
+}
+
+func (m *Model) selectedTextInner() string {
 	var src string
 	switch {
 	case m.file != nil:
@@ -519,7 +655,7 @@ func (m *Model) selectedText() string {
 		}
 		out = append(out, ansi.Strip(ansi.Cut(line, a, b)))
 	}
-	return strings.Join(out, "\n")
+	return joinWrappedLines(out)
 }
 
 func diffFile(

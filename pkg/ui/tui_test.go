@@ -3,8 +3,10 @@ package ui
 import (
 	"image/color"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
@@ -231,6 +233,95 @@ func TestLateBackgroundDetectionIgnoredAfterTimeout(t *testing.T) {
 		t.Fatal("expected late background message to be ignored after timeout")
 	}
 }
+
+// TestRightSideSelectionEndToEnd drives the full mouse pipeline against a
+// real delta render to verify a click + drag on the right half of an SBS
+// view actually produces a visible highlight. This is a regression guard
+// against the production failure mode the user reported ("right side
+// selection doesn't work, the selection doesn't even appear").
+func TestRightSideSelectionEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("delta"); err != nil {
+		t.Skip("delta not installed, skipping end-to-end test")
+	}
+	m := newTestMainModel(t)
+	isDark := true
+	m.isDarkBackground = &isDark
+	m.diffViewer.SetDarkBackground(true)
+	m.fileTree.SetDarkBackground(true)
+	m.sideBySide = true
+	m.diffViewer.SetSideBySide(true)
+
+	// Size the UI like a typical wide terminal. WindowSizeMsg triggers the
+	// dir-diff render through diff() which returns a Cmd that runs delta.
+	m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 160, Height: 40})
+	// Run the deferred fetchFileTree Cmd to populate m.files / m.fileTree
+	// the way Init() would in production, then trigger SetDirPatch.
+	m = updateMainModel(t, m, m.fetchFileTree())
+
+	// Drain the diff Cmd(s) until a diffContentMsg lands in diffViewer
+	// (delta runs in a goroutine via the Cmd indirection).
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if m.diffViewer.GutterCol() > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for diffContentMsg; gutterCol still %d",
+				m.diffViewer.GutterCol())
+		}
+		// Resolve any pending Cmds we know about.
+		if cmd := m.diffViewer.Init(); cmd != nil {
+			if msg := cmd(); msg != nil {
+				m = updateMainModel(t, m, msg)
+			}
+		}
+		// Best-effort: re-trigger a render so the dir delta call resolves.
+		m.diffViewer.ClearCache()
+		if cmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight()); cmd != nil {
+			if msg := cmd(); msg != nil {
+				m = updateMainModel(t, m, msg)
+			}
+		}
+	}
+
+	gutter := m.diffViewer.GutterCol()
+	if gutter <= 0 {
+		t.Fatalf("expected gutterCol > 0 after dir-diff render, got %d", gutter)
+	}
+
+	// Pick mouse coordinates on the right half of the diff pane. The diff
+	// pane starts at x=sidebarWidth and the gutter is at +gutter inside it.
+	rightX := m.sidebarWidth() + gutter + 5
+	clickY := m.headerHeight() + 1 + diffviewerDirHeaderHeight() + 1
+
+	// View() must run once before any mouse events: bubblezone registers
+	// zones during zone.Scan inside View(), and zone.Get* lookups return
+	// empty info until then.
+	_ = m.View().Content
+
+	m = updateMainModel(t, m, tea.MouseClickMsg(tea.Mouse{
+		X:      rightX,
+		Y:      clickY,
+		Button: tea.MouseLeft,
+	}))
+	if !m.diffViewer.IsSelecting() {
+		t.Fatalf("expected diffViewer.IsSelecting()==true after click at (x=%d,y=%d)", rightX, clickY)
+	}
+	m = updateMainModel(t, m, tea.MouseMotionMsg(tea.Mouse{
+		X:      rightX + 10,
+		Y:      clickY,
+		Button: tea.MouseLeft,
+	}))
+
+	view := m.View().Content
+	if !strings.Contains(view, "\x1b[7m") {
+		t.Fatalf("expected reverse-video escape (\\x1b[7m) in View() after right-side drag — selection rendered nothing")
+	}
+}
+
+// Tiny helper so the test doesn't need to import diffviewer just for the
+// header height constant.
+func diffviewerDirHeaderHeight() int { return 3 }
 
 func newTestMainModel(t *testing.T) mainModel {
 	t.Helper()
