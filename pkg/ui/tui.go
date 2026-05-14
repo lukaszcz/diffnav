@@ -1193,14 +1193,19 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		if msg.Button == tea.MouseLeft {
 			// Keep coordinate check for resize border (hybrid approach).
+			// Grab zone is asymmetric: divider column and up to
+			// sidebarGrabThreshold cols to the left only. Extending rightward
+			// would steal clicks from the first diff-viewer columns and break
+			// selection started just past the "│" divider.
 			sidebarWidth := m.sidebarWidth()
 			if !m.searching && m.isShowingFileTree &&
-				abs(msg.X-sidebarWidth) <= sidebarGrabThreshold {
+				msg.X >= sidebarWidth-sidebarGrabThreshold && msg.X <= sidebarWidth {
 				m.draggingSidebar = true
 				return m, nil
 			}
-			// Allow grabbing the line when sidebar is hidden.
-			if !m.isSidebarVisible() && msg.X <= sidebarGrabThreshold {
+			// Allow grabbing the line when sidebar is hidden. The line sits at
+			// col 0; anything to the right is diff-viewer content.
+			if !m.isSidebarVisible() && msg.X == 0 {
 				m.draggingSidebar = true
 				m.isShowingFileTree = true
 				return m, nil

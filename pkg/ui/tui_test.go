@@ -119,7 +119,7 @@ func TestHiddenSidebarGrabStillShowsFileTreeWhenNotSearching(t *testing.T) {
 	m.isShowingFileTree = false
 	m.searching = false
 
-	updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+	updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 0, Y: 1, Button: tea.MouseLeft}))
 
 	result, ok := updated.(mainModel)
 	if !ok {
@@ -127,6 +127,55 @@ func TestHiddenSidebarGrabStillShowsFileTreeWhenNotSearching(t *testing.T) {
 	}
 	if !result.isShowingFileTree {
 		t.Fatal("expected left-edge click on the hidden sidebar grab line to show the file tree")
+	}
+}
+
+// Regression: clicking the first column of the diff viewer (one column right
+// of the hidden sidebar's grab line) must not reopen the file tree — the
+// sidebar grab zone must not extend into diff-viewer columns or selection
+// starting just past the divider becomes impossible.
+func TestHiddenSidebarGrabDoesNotConsumeDiffViewerClicks(t *testing.T) {
+	m := newTestMainModel(t)
+	m.width = 100
+	m.height = 40
+	m.isShowingFileTree = false
+	m.searching = false
+
+	updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+
+	result, ok := updated.(mainModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if result.isShowingFileTree {
+		t.Fatal("expected click one column right of the hidden grab line to fall through to the diff viewer")
+	}
+	if result.draggingSidebar {
+		t.Fatal("expected click one column right of the hidden grab line to not start a sidebar drag")
+	}
+}
+
+// Regression: clicking one or two columns to the right of the "│" divider
+// between the file tree and the diff viewer must start a diff selection
+// rather than initiating a sidebar resize drag.
+func TestDiffViewerClickJustRightOfDividerDoesNotStartDragging(t *testing.T) {
+	for _, offset := range []int{1, 2} {
+		m := newTestMainModel(t)
+		m.width = 160
+		m.height = 40
+		m.isShowingFileTree = true
+		m.searching = false
+
+		x := m.sidebarWidth() + offset
+		updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: 1, Button: tea.MouseLeft}))
+
+		result, ok := updated.(mainModel)
+		if !ok {
+			t.Fatalf("offset=%d: unexpected model type %T", offset, updated)
+		}
+		if result.draggingSidebar {
+			t.Fatalf("offset=%d: expected click %d col(s) right of divider to not start a sidebar drag", offset, offset)
+		}
 	}
 }
 
