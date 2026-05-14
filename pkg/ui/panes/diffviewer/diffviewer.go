@@ -130,14 +130,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		// sel.active == false; the next MouseMotionMsg is a no-op until the
 		// next click.
 		m.sel = selection{}
-		// Truncate lines to viewport width to prevent ANSI escape overflow.
-		lines := strings.Split(msg.text, "\n")
-		for i, line := range lines {
-			if lipgloss.Width(line) > m.vp.Width() && m.vp.Width() > 0 {
-				lines[i] = ansi.Truncate(line, m.vp.Width(), "")
-			}
-		}
-		diff := strings.Join(lines, "\n")
+		// Wrap long lines so unified delta output (which delta does not wrap
+		// itself) folds at the viewport edge instead of overflowing. The wrap
+		// uses delta's wrap-left-symbol '↵', so joinWrappedLines collapses
+		// the resulting rows back to one logical line on selection/copy.
+		diff := wrapLongLines(msg.text, m.vp.Width())
 		if _, ok := m.cache[msg.cacheKey]; ok {
 			m.cache[msg.cacheKey].diff = diff
 		}
@@ -677,7 +674,15 @@ func diffFile(
 		args := []string{
 			"--paging=never",
 			fmt.Sprintf("-w=%d", width),
-			fmt.Sprintf("--max-line-length=%d", width),
+		}
+		// In side-by-side delta wraps on its own and the --max-line-length cap
+		// keeps it from trying to render pathologically long lines. In unified
+		// mode delta won't wrap — disable truncation entirely so the full line
+		// reaches wrapLongLines.
+		if useSideBySide {
+			args = append(args, fmt.Sprintf("--max-line-length=%d", width))
+		} else {
+			args = append(args, "--max-line-length=0")
 		}
 		args = append(args, themeArgs...)
 		if useSideBySide {
@@ -722,7 +727,13 @@ func diffDir(
 			fmt.Sprintf("--file-style='%s bold %s'", c, c),
 			fmt.Sprintf("--file-decoration-style='%s box %s'", c, c),
 			fmt.Sprintf("-w=%d", width),
-			fmt.Sprintf("--max-line-length=%d", width),
+		}
+		// See diffFile: unified mode needs --max-line-length=0 so long lines
+		// survive long enough for wrapLongLines to wrap them.
+		if useSideBySide {
+			args = append(args, fmt.Sprintf("--max-line-length=%d", width))
+		} else {
+			args = append(args, "--max-line-length=0")
 		}
 		args = append(args, themeArgs...)
 		if useSideBySide {

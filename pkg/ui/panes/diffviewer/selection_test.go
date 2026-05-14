@@ -997,6 +997,144 @@ func TestSelection_StripsWrapSymbolsOnExtract(t *testing.T) {
 	}
 }
 
+// (24) wrapLongLines pure-logic tests.
+func TestWrapLongLines(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		width int
+		want  []string // each entry is one physical row (after split on '\n')
+	}{
+		{
+			name:  "line at limit passes through unchanged",
+			in:    "abcdefghij",
+			width: 10,
+			want:  []string{"abcdefghij"},
+		},
+		{
+			name:  "line under limit passes through unchanged",
+			in:    "abc",
+			width: 10,
+			want:  []string{"abc"},
+		},
+		{
+			name:  "line over limit wraps into chunks ending in ↵",
+			in:    "abcdefghij" + "klmnopqrst" + "uvw",
+			width: 10,
+			want: []string{
+				"abcdefghi↵",
+				"jklmnopqr↵",
+				"stuvw",
+			},
+		},
+		{
+			name:  "multiple lines wrap independently",
+			in:    "short\n" + strings.Repeat("x", 12) + "\nshort2",
+			width: 6,
+			want: []string{
+				"short",
+				"xxxxx↵",
+				"xxxxx↵",
+				"xx",
+				"short2",
+			},
+		},
+		{
+			name:  "empty input is preserved",
+			in:    "",
+			width: 10,
+			want:  []string{""},
+		},
+		{
+			name:  "non-positive width returns input verbatim",
+			in:    "anything goes",
+			width: 0,
+			want:  []string{"anything goes"},
+		},
+		{
+			name:  "width=1 falls back to truncate (cannot fit content + symbol)",
+			in:    "abcdef",
+			width: 1,
+			want:  []string{"a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := wrapLongLines(tc.in, tc.width)
+			gotRows := strings.Split(got, "\n")
+			// Compare stripped (no ANSI) representations.
+			stripped := make([]string, len(gotRows))
+			for i, r := range gotRows {
+				stripped[i] = ansi.Strip(r)
+			}
+			if !equalStringSlices(stripped, tc.want) {
+				t.Fatalf("got rows %q want %q", stripped, tc.want)
+			}
+			// Every wrapped row (those ending in '↵') must fit within width.
+			for _, r := range stripped {
+				if w := lipgloss.Width(r); w > tc.width && tc.width > 0 {
+					t.Fatalf("row %q has width %d > %d", r, w, tc.width)
+				}
+			}
+		})
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// (25) wrapLongLines preserves ANSI style escapes so the wrapped row reopens
+// the original styling — and the selection extractor strips both the wrap
+// symbol and the styles when collapsing.
+func TestWrapLongLines_AnsiPreservedAndCollapsesOnExtract(t *testing.T) {
+	// A red-foreground line longer than the width.
+	red := "\x1b[31m"
+	reset := "\x1b[0m"
+	long := red + "aaaaabbbbbcccccddddd" + reset
+	out := wrapLongLines(long, 10)
+	rows := strings.Split(out, "\n")
+	if len(rows) < 2 {
+		t.Fatalf("expected wrap to produce >=2 rows, got %d: %q", len(rows), rows)
+	}
+	for _, r := range rows {
+		// At minimum the SGR 31 (red) escape should appear somewhere in the
+		// row that contains visible content from the original line.
+		plain := ansi.Strip(r)
+		if plain == "" {
+			continue
+		}
+		if !strings.Contains(r, "\x1b[") {
+			t.Fatalf("expected ANSI escapes preserved in row %q", r)
+		}
+	}
+
+	// joinWrappedLines should collapse the rows back to one logical line
+	// after ANSI stripping.
+	plainRows := make([]string, len(rows))
+	for i, r := range rows {
+		plainRows[i] = ansi.Strip(r)
+	}
+	joined := joinWrappedLines(plainRows)
+	if strings.Contains(joined, "↵") {
+		t.Fatalf("expected ↵ stripped from joined output, got %q", joined)
+	}
+	if strings.Contains(joined, "\n") {
+		t.Fatalf("expected wrapped rows joined to one line, got %q", joined)
+	}
+	if joined != "aaaaabbbbbcccccddddd" {
+		t.Fatalf("expected joined %q, got %q", "aaaaabbbbbcccccddddd", joined)
+	}
+}
+
 // (24) Cross-mode cache reuse: after rendering a file in unified mode (which
 // resets gutterCol=-1) and then re-rendering it side-by-side from a cached
 // payload, the side-by-side columns must be re-detected. Without this fix the

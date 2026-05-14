@@ -175,6 +175,54 @@ const (
 	truncationSymbol      = "→" // →   end-of-line truncation indicator
 )
 
+// wrapLongLines folds physical rows wider than `width` into multiple rows of
+// at most `width` visual columns, joined by delta's wrap-left-symbol "↵". The
+// symbol takes one column, so content chunks are sized at width-1. Lines that
+// already fit are passed through unchanged.
+//
+// Output is compatible with joinWrappedLines: a row ending in '↵' is the
+// continuation marker that selection/copy uses to merge the next row back into
+// the same logical line. ANSI styles are preserved via ansi.Cut, with a SGR
+// reset emitted before each '↵' so the symbol itself doesn't pick up a
+// trailing background color from the chunk.
+func wrapLongLines(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	var b strings.Builder
+	b.Grow(len(text))
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		w := ansi.StringWidth(line)
+		if w <= width {
+			b.WriteString(line)
+			continue
+		}
+		chunkWidth := width - 1
+		if chunkWidth < 1 {
+			// Viewport too narrow to fit content + symbol; fall back to a
+			// plain truncate so we don't emit zero-width chunks forever.
+			b.WriteString(ansi.Truncate(line, width, ""))
+			continue
+		}
+		for start := 0; start < w; start += chunkWidth {
+			end := start + chunkWidth
+			if end >= w {
+				b.WriteString(ansi.Cut(line, start, w))
+				break
+			}
+			b.WriteString(ansi.Cut(line, start, end))
+			b.WriteString("\x1b[0m")
+			b.WriteString(wrapLeftSymbol)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
 // joinWrappedLines folds delta-rendered line continuations back into single
 // logical lines. Input is a slice of ANSI-stripped row substrings (one per
 // physical viewport row in the selection); output is the joined plaintext.
