@@ -203,6 +203,14 @@ func init() {
 				fmt.Println("No input provided, exiting")
 				os.Exit(0)
 			}
+
+			if !isUnifiedDiff(input) {
+				fmt.Print(input)
+				if !strings.HasSuffix(input, "\n") {
+					fmt.Println()
+				}
+				os.Exit(0)
+			}
 		}
 
 		cfg := config.Load()

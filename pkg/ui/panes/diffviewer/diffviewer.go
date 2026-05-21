@@ -146,18 +146,6 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "down", "j", "n":
-			break
-		case "up", "k", "N", "p":
-			break
-		default:
-			vp, vpCmd := m.vp.Update(msg)
-			cmds = append(cmds, vpCmd)
-			m.vp = vp
-		}
-
 	case diffContentMsg:
 		if msg.renderID != m.renderID {
 			break
@@ -179,6 +167,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.vp.SetContent(diff)
 		m.refreshColumnDetection(diff)
 	}
+
+	vp, vpCmd := m.vp.Update(msg)
+	cmds = append(cmds, vpCmd)
+	m.vp = vp
 
 	return m, tea.Batch(cmds...)
 }
