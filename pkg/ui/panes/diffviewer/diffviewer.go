@@ -1,8 +1,12 @@
 package diffviewer
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"image/color"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -27,6 +31,8 @@ import (
 // content rows (see tui.go's diffPanePoint) can skip past it.
 const DirHeaderHeight = 3
 
+const maxDeltaLineLength = 4096
+
 type cachedNode struct {
 	path      string
 	files     []*gitdiff.File
@@ -49,12 +55,36 @@ func cacheReady(node *cachedNode) bool {
 	return node != nil && node.ready
 }
 
+type deltaRenderer struct {
+	run func(context.Context, []string, func(io.Writer) error) ([]byte, error)
+}
+
+func defaultDeltaRenderer() deltaRenderer {
+	return deltaRenderer{run: runDelta}
+}
+
+func (r deltaRenderer) Run(
+	ctx context.Context,
+	args []string,
+	writeInput func(io.Writer) error,
+) ([]byte, error) {
+	if r.run == nil {
+		return runDelta(ctx, args, writeInput)
+	}
+	return r.run(ctx, args, writeInput)
+}
+
 type Model struct {
 	common.Common
 	vp    viewport.Model
 	file  *cachedNode
 	dir   *cachedNode
 	cache nodeCache
+	// renderer is injectable so tests can assert render lifecycle behavior
+	// without launching the external delta binary.
+	renderer deltaRenderer
+	// cancelRender stops the currently running delta process, if any.
+	cancelRender context.CancelFunc
 	// Monotonic render generation used to drop stale async results.
 	renderID   uint64
 	sideBySide bool
@@ -92,6 +122,7 @@ func New(sideBySide bool, theme string) Model {
 		vp:              viewport.Model{},
 		sideBySide:      sideBySide,
 		cache:           map[string]*cachedNode{},
+		renderer:        defaultDeltaRenderer(),
 		themeMode:       parseThemeMode(theme),
 		gutterCol:       -1,
 		leftContentCol:  -1,
@@ -131,6 +162,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if msg.renderID != m.renderID {
 			break
 		}
+		m.cancelRender = nil
 		// Clear before gutter detection so a mid-drag content swap leaves
 		// sel.active == false; the next MouseMotionMsg is a no-op until the
 		// next click.
@@ -289,6 +321,22 @@ func (m *Model) Width() int {
 	return m.vp.Width()
 }
 
+func (m *Model) startRender() (context.Context, uint64) {
+	m.cancelPendingRender()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelRender = cancel
+	m.renderID++
+	return ctx, m.renderID
+}
+
+func (m *Model) cancelPendingRender() {
+	if m.cancelRender != nil {
+		m.cancelRender()
+		m.cancelRender = nil
+		m.renderID++
+	}
+}
+
 func (m *Model) diff() tea.Cmd {
 	if m.themeMode == themeAuto && m.isDarkBackground == nil {
 		return nil
@@ -297,6 +345,7 @@ func (m *Model) diff() tea.Cmd {
 	if m.file != nil {
 		key := cacheKey(m.file.path, m.sideBySide)
 		if cached, ok := m.cache[key]; ok && cacheReady(cached) {
+			m.cancelPendingRender()
 			m.file = cached
 			m.vp.SetContent(cached.diff)
 			m.refreshColumnDetection(cached.diff)
@@ -310,11 +359,20 @@ func (m *Model) diff() tea.Cmd {
 		}
 		m.file = node
 		m.cache[key] = node
-		m.renderID++
-		return diffFile(node, m.contentWidth(), m.sideBySide, m.deltaThemeArgs(), m.renderID)
+		ctx, renderID := m.startRender()
+		return diffFile(
+			ctx,
+			m.renderer,
+			node,
+			m.contentWidth(),
+			m.sideBySide,
+			m.deltaThemeArgs(),
+			renderID,
+		)
 	} else if m.dir != nil {
 		key := cacheKey(m.dir.path, m.sideBySide)
 		if cached, ok := m.cache[key]; ok && cacheReady(cached) {
+			m.cancelPendingRender()
 			m.dir = cached
 			m.vp.SetContent(cached.diff)
 			m.refreshColumnDetection(cached.diff)
@@ -328,19 +386,21 @@ func (m *Model) diff() tea.Cmd {
 		}
 		m.dir = node
 		m.cache[key] = node
-		m.renderID++
 		preamble := ""
 		if m.dir.path == "/" {
 			preamble = m.preamble
 		}
+		ctx, renderID := m.startRender()
 		return diffDir(
+			ctx,
+			m.renderer,
 			node,
 			m.contentWidth(),
 			m.sideBySide,
 			m.deltaThemeArgs(),
 			common.SelectionColor(common.Selected, m.isDarkBackground),
 			preamble,
-			m.renderID,
+			renderID,
 		)
 	}
 
@@ -397,6 +457,7 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 	fname := filenode.GetFileName(file)
 	key := cacheKey(fname, m.sideBySide)
 	if cached, ok := m.cache[key]; ok && cacheReady(cached) {
+		m.cancelPendingRender()
 		m.file = cached
 		m.vp.SetContent(cached.diff)
 		m.refreshColumnDetection(cached.diff)
@@ -424,6 +485,7 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 
 	key := cacheKey(dirPath, m.sideBySide)
 	if cached, ok := m.cache[key]; ok && cacheReady(cached) {
+		m.cancelPendingRender()
 		m.dir = cached
 		m.vp.SetContent(cached.diff)
 		m.refreshColumnDetection(cached.diff)
@@ -677,13 +739,15 @@ func (m *Model) selectedTextInner() string {
 }
 
 func diffFile(
+	ctx context.Context,
+	renderer deltaRenderer,
 	node *cachedNode,
 	width int,
 	sideBySide bool,
 	themeArgs []string,
 	renderID uint64,
 ) tea.Cmd {
-	if width == 0 || node == nil || len(node.files) != 1 {
+	if width <= 0 || node == nil || len(node.files) != 1 {
 		return nil
 	}
 
@@ -692,28 +756,18 @@ func diffFile(
 	return func() tea.Msg {
 		// Only use side-by-side if preference is true AND file is not new/deleted
 		useSideBySide := sideBySide && !file.IsNew && !file.IsDelete
-		args := []string{
-			"--paging=never",
-			fmt.Sprintf("-w=%d", width),
-		}
-		// In side-by-side delta wraps on its own and the --max-line-length cap
-		// keeps it from trying to render pathologically long lines. In unified
-		// mode delta won't wrap — disable truncation entirely so the full line
-		// reaches wrapLongLines.
-		if useSideBySide {
-			args = append(args, fmt.Sprintf("--max-line-length=%d", width))
-		} else {
-			args = append(args, "--max-line-length=0")
-		}
-		args = append(args, themeArgs...)
-		if useSideBySide {
-			args = append(args, "--side-by-side")
-		}
-		deltac := exec.Command("delta", args...)
-		deltac.Env = os.Environ()
-		deltac.Stdin = strings.NewReader(file.String() + "\n")
-		out, err := deltac.Output()
+		args := deltaArgs(width, useSideBySide, themeArgs, nil)
+		out, err := renderer.Run(ctx, args, func(w io.Writer) error {
+			if _, err := io.WriteString(w, file.String()); err != nil {
+				return err
+			}
+			_, err := io.WriteString(w, "\n")
+			return err
+		})
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return common.ErrMsg{Err: err}
 		}
 		return diffContentMsg{cacheKey: key, text: string(out), renderID: renderID}
@@ -721,6 +775,8 @@ func diffFile(
 }
 
 func diffDir(
+	ctx context.Context,
+	renderer deltaRenderer,
 	dir *cachedNode,
 	width int,
 	sideBySide bool,
@@ -729,7 +785,7 @@ func diffDir(
 	preamble string,
 	renderID uint64,
 ) tea.Cmd {
-	if width == 0 || dir == nil {
+	if width <= 0 || dir == nil {
 		return nil
 	}
 	key := cacheKey(dir.path, sideBySide)
@@ -737,8 +793,7 @@ func diffDir(
 		s := lipgloss.NewStyle().Background(selectedBg)
 		c := common.LipglossColorToHex(selectedBg)
 		useSideBySide := sideBySide
-		args := []string{
-			"--paging=never",
+		dirArgs := []string{
 			fmt.Sprintf("--file-modified-label=%s",
 				utils.RemoveReset(s.Foreground(lipgloss.Yellow).Render(" "))),
 			fmt.Sprintf("--file-removed-label=%s",
@@ -747,28 +802,21 @@ func diffDir(
 				utils.RemoveReset(s.Foreground(lipgloss.Green).Render(" "))),
 			fmt.Sprintf("--file-style='%s bold %s'", c, c),
 			fmt.Sprintf("--file-decoration-style='%s box %s'", c, c),
-			fmt.Sprintf("-w=%d", width),
 		}
-		// See diffFile: unified mode needs --max-line-length=0 so long lines
-		// survive long enough for wrapLongLines to wrap them.
-		if useSideBySide {
-			args = append(args, fmt.Sprintf("--max-line-length=%d", width))
-		} else {
-			args = append(args, "--max-line-length=0")
-		}
-		args = append(args, themeArgs...)
-		if useSideBySide {
-			args = append(args, "--side-by-side")
-		}
-		deltac := exec.Command("delta", args...)
-		deltac.Env = os.Environ()
-		strs := strings.Builder{}
-		for _, file := range dir.files {
-			strs.WriteString(file.String())
-		}
-		deltac.Stdin = strings.NewReader(strs.String() + "\n")
-		out, err := deltac.Output()
+		args := deltaArgs(width, useSideBySide, themeArgs, dirArgs)
+		out, err := renderer.Run(ctx, args, func(w io.Writer) error {
+			for _, file := range dir.files {
+				if _, err := io.WriteString(w, file.String()); err != nil {
+					return err
+				}
+			}
+			_, err := io.WriteString(w, "\n")
+			return err
+		})
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return common.ErrMsg{Err: err}
 		}
 
@@ -778,6 +826,75 @@ func diffDir(
 		}
 		return diffContentMsg{cacheKey: key, text: text, renderID: renderID}
 	}
+}
+
+func deltaArgs(width int, sideBySide bool, themeArgs, extraArgs []string) []string {
+	args := []string{
+		"--paging=never",
+		fmt.Sprintf("-w=%d", width),
+		fmt.Sprintf("--max-line-length=%d", deltaMaxLineLength(width, sideBySide)),
+	}
+	args = append(args, extraArgs...)
+	args = append(args, themeArgs...)
+	if sideBySide {
+		args = append(args, "--side-by-side")
+	}
+	return args
+}
+
+func deltaMaxLineLength(width int, sideBySide bool) int {
+	if sideBySide && width > 0 && width < maxDeltaLineLength {
+		return width
+	}
+	return maxDeltaLineLength
+}
+
+func runDelta(
+	ctx context.Context,
+	args []string,
+	writeInput func(io.Writer) error,
+) ([]byte, error) {
+	deltac := exec.CommandContext(ctx, "delta", args...)
+	deltac.Env = os.Environ()
+
+	stdin, err := deltac.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	deltac.Stdout = &stdout
+	deltac.Stderr = &stderr
+
+	if err := deltac.Start(); err != nil {
+		return nil, err
+	}
+
+	writeErr := make(chan error, 1)
+	go func() {
+		err := writeInput(stdin)
+		if closeErr := stdin.Close(); err == nil {
+			err = closeErr
+		}
+		writeErr <- err
+	}()
+
+	waitErr := deltac.Wait()
+	stdinErr := <-writeErr
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if stdinErr != nil && waitErr == nil {
+		return nil, stdinErr
+	}
+	if waitErr != nil {
+		if stderr.Len() > 0 {
+			return nil, fmt.Errorf("%w: %s", waitErr, strings.TrimSpace(stderr.String()))
+		}
+		return nil, waitErr
+	}
+	return stdout.Bytes(), nil
 }
 
 func (m *Model) SetDarkBackground(isDark bool) tea.Cmd {
@@ -859,6 +976,7 @@ type diffContentMsg struct {
 }
 
 func (m *Model) ClearCache() {
+	m.cancelPendingRender()
 	m.cache = make(nodeCache)
 }
 
