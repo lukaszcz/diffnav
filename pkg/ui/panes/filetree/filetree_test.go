@@ -12,6 +12,127 @@ import (
 	"github.com/dlvhdr/diffnav/pkg/filenode"
 )
 
+func TestClickDirectorySelectsAndOpensOnlyClickedDirectory(t *testing.T) {
+	m := newTestTreeModel([]string{
+		"app/main.go",
+		"app/internal/db.go",
+		"docs/readme.md",
+	})
+	app := nodeByPath(t, &m, "app")
+	internal := nodeByPath(t, &m, "app/internal")
+	docs := nodeByPath(t, &m, "docs")
+	internal.Close()
+	app.Close()
+	m.SetCursorNoScroll(docs.YOffset())
+
+	m.ClickNode(app)
+
+	if got := m.CurrNodePath(); got != "app" {
+		t.Fatalf("expected clicked directory to be selected, got %q", got)
+	}
+	if !app.IsOpen() {
+		t.Fatal("expected folded clicked directory to open")
+	}
+	if internal.IsOpen() {
+		t.Fatal("expected folded child directory to remain folded")
+	}
+}
+
+func TestClickSelectedDirectoryTogglesOpenState(t *testing.T) {
+	m := newTestTreeModel([]string{
+		"app/main.go",
+		"app/internal/db.go",
+		"docs/readme.md",
+	})
+	app := nodeByPath(t, &m, "app")
+	m.SetCursorNoScroll(app.YOffset())
+
+	if !app.IsOpen() {
+		t.Fatal("setup: expected app directory to start open")
+	}
+	m.ClickNode(app)
+	if app.IsOpen() {
+		t.Fatal("expected selected open directory click to close it")
+	}
+
+	m.ClickNode(app)
+	if !app.IsOpen() {
+		t.Fatal("expected selected folded directory click to open it")
+	}
+}
+
+func TestClickUnselectedOpenDirectoryDoesNotCloseIt(t *testing.T) {
+	m := newTestTreeModel([]string{
+		"app/main.go",
+		"docs/readme.md",
+	})
+	app := nodeByPath(t, &m, "app")
+	docs := nodeByPath(t, &m, "docs")
+	m.SetCursorNoScroll(docs.YOffset())
+
+	m.ClickNode(app)
+
+	if got := m.CurrNodePath(); got != "app" {
+		t.Fatalf("expected clicked directory to be selected, got %q", got)
+	}
+	if !app.IsOpen() {
+		t.Fatal("expected unselected open directory click to leave it open")
+	}
+}
+
+func TestNodeDescendantDiffsIncludesFoldedChildren(t *testing.T) {
+	m := newTestTreeModel([]string{
+		"app/main.go",
+		"app/internal/db.go",
+		"docs/readme.md",
+	})
+	app := nodeByPath(t, &m, "app")
+	internal := nodeByPath(t, &m, "app/internal")
+	internal.Close()
+
+	files := m.NodeDescendantDiffs(app)
+
+	if len(files) != 2 {
+		t.Fatalf("expected app diff to include folded child files, got %d", len(files))
+	}
+	got := []string{filenode.GetFileName(files[0]), filenode.GetFileName(files[1])}
+	want := []string{"app/main.go", "app/internal/db.go"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected file %d to be %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
+func newTestTreeModel(paths []string) Model {
+	cfg := config.DefaultConfig()
+	cfg.UI.Icons = filenode.IconsASCII
+	m := New(cfg)
+	files := make([]*gitdiff.File, 0, len(paths))
+	for _, p := range paths {
+		files = append(files, &gitdiff.File{NewName: p})
+	}
+	return m.SetFiles(files)
+}
+
+func nodeByPath(t *testing.T, m *Model, path string) *tree.Node {
+	t.Helper()
+	for _, node := range m.t.AllNodes() {
+		switch val := node.GivenValue().(type) {
+		case *dirnode.DirNode:
+			if val.FullPath == path {
+				return node
+			}
+		case *filenode.FileNode:
+			if filenode.GetFileName(val.File) == path {
+				return node
+			}
+		}
+	}
+	t.Fatalf("expected to find node %q", path)
+	return nil
+}
+
 // .
 // ├── graphql-server
 // │   └── tests

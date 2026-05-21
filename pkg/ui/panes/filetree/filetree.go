@@ -442,10 +442,34 @@ func (m *Model) GetCurrNode() *tree.Node {
 }
 
 func (m *Model) GetCurrNodeDesendantDiffs() []*gitdiff.File {
+	return m.NodeDescendantDiffs(m.GetCurrNode())
+}
+
+// NodeDescendantDiffs returns the files under node without depending on the
+// node's current open/closed render state.
+func (m *Model) NodeDescendantDiffs(node *tree.Node) []*gitdiff.File {
 	var files []*gitdiff.File
-	for _, node := range m.GetCurrNode().AllNodes() {
-		if file, ok := node.GivenValue().(*filenode.FileNode); ok {
-			files = append(files, file.File)
+	if node == nil {
+		return files
+	}
+
+	switch val := node.GivenValue().(type) {
+	case *filenode.FileNode:
+		if val.File != nil {
+			files = append(files, val.File)
+		}
+	case string:
+		files = append(files, m.files...)
+	case *dirnode.DirNode:
+		if val.FullPath == "/" {
+			files = append(files, m.files...)
+			break
+		}
+		prefix := strings.TrimSuffix(val.FullPath, "/") + "/"
+		for _, file := range m.files {
+			if strings.HasPrefix(filenode.GetFileName(file), prefix) {
+				files = append(files, file)
+			}
 		}
 	}
 	return files
@@ -458,10 +482,43 @@ func (m *Model) SetCursorNoScroll(cursor int) {
 		return
 	}
 	scroll := m.t.ViewportYOffset()
-	m.rebuildTree()
-
 	m.t.SetYOffset(cursor)
 	m.t.SetViewportYOffset(scroll)
+}
+
+// ClickNode applies mouse-click behavior to a visible tree node.
+func (m *Model) ClickNode(node *tree.Node) {
+	if len(m.files) == 0 || node == nil {
+		return
+	}
+
+	current := m.t.NodeAtCurrentOffset()
+	wasSelected := current != nil && current.YOffset() == node.YOffset()
+	wasOpen := node.IsOpen()
+	scroll := m.t.ViewportYOffset()
+
+	m.t.SetYOffset(node.YOffset())
+	if isDirectoryNode(node) {
+		switch {
+		case !wasOpen:
+			m.t.OpenCurrentNode()
+		case wasSelected:
+			m.t.CloseCurrentNode()
+		}
+	}
+	m.t.SetViewportYOffset(scroll)
+}
+
+func isDirectoryNode(node *tree.Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.GivenValue().(type) {
+	case string, *dirnode.DirNode:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Model) CurrNodePath() string {

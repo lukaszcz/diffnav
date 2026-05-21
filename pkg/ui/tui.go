@@ -1360,9 +1360,9 @@ func (m mainModel) handleFileTreeClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	m.fileTree.ClickNode(node)
+	node = m.fileTree.GetCurrNode()
 	m, cmd = m.setNodeDiff(node)
-	// Use SetCursorNoScroll to avoid jumping the file tree view.
-	m.fileTree.SetCursorNoScroll(node.YOffset())
 	return m, cmd
 }
 
@@ -1548,7 +1548,7 @@ func (m mainModel) setNodeDiff(node *tree.Node) (mainModel, tea.Cmd) {
 	case *filenode.FileNode:
 		m.diffViewer, cmd = m.diffViewer.SetFilePatch(val.File)
 	case string, *dirnode.DirNode:
-		files := m.fileTree.GetCurrNodeDesendantDiffs()
+		files := m.fileTree.NodeDescendantDiffs(node)
 
 		fullPath := "/"
 		if val, ok := node.GivenValue().(*dirnode.DirNode); ok {
