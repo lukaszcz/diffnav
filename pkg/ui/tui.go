@@ -1018,17 +1018,52 @@ func (m mainModel) renderScrollbar() string {
 	return sb.String()
 }
 
+type searchResultPalette struct {
+	fileColor color.Color
+	dirColor  color.Color
+	iconDark  bool
+}
+
+func (m mainModel) searchResultPalette() searchResultPalette {
+	if m.isDarkBackground != nil && !*m.isDarkBackground {
+		return searchResultPalette{
+			fileColor: lipgloss.Color("#334155"),
+			dirColor:  lipgloss.Color("#64748b"),
+			iconDark:  false,
+		}
+	}
+
+	return searchResultPalette{
+		fileColor: lipgloss.Color("#F7F7F7"),
+		dirColor:  lipgloss.Color("#B8B8B8"),
+		iconDark:  true,
+	}
+}
+
 func (m mainModel) resultsView() string {
 	sb := strings.Builder{}
-	baseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F7F7F7"))
-	dirStyle := lipgloss.NewStyle().Bold(false).Foreground(lipgloss.Color("#B8B8B8"))
+	palette := m.searchResultPalette()
 	for i, f := range m.filtered {
 		icon := neo.ByPath(f)
 		if icon == nil {
 			icon = neo.ByFileExtension("txt")
 		}
+		fileColor := palette.fileColor
+		dirColor := palette.dirColor
+		iconColor := icon.Color(palette.iconDark)
+		selectedBg := color.Color(lipgloss.Color("#1b1b33"))
+		selectedFg := color.Color(lipgloss.NoColor{})
+		if i == m.resultsCursor && m.isDarkBackground != nil && !*m.isDarkBackground {
+			selectedBg = common.SelectionColor(common.Selected, m.isDarkBackground)
+			selectedFg = lipgloss.Color("#334155")
+			fileColor = selectedFg
+			dirColor = selectedFg
+			iconColor = selectedFg
+		}
+		baseStyle := lipgloss.NewStyle().Foreground(fileColor)
+		dirStyle := lipgloss.NewStyle().Bold(false).Foreground(dirColor)
 		base := utils.RemoveReset(lipgloss.NewStyle().
-			Foreground(icon.Color(true)).
+			Foreground(iconColor).
 			Render(icon.Glyph().String()) + " " + baseStyle.Render(path.Base(f)))
 		dir := utils.TruncateString(
 			dirStyle.Render(path.Dir(f)),
@@ -1038,12 +1073,6 @@ func (m mainModel) resultsView() string {
 			dir = ""
 		}
 		if i == m.resultsCursor {
-			selectedBg := color.Color(lipgloss.Color("#1b1b33"))
-			selectedFg := color.Color(lipgloss.NoColor{})
-			if m.isDarkBackground != nil && !*m.isDarkBackground {
-				selectedBg = common.SelectionColor(common.Selected, m.isDarkBackground)
-				selectedFg = lipgloss.Color("#334155")
-			}
 			bg := lipgloss.NewStyle().Background(selectedBg).Foreground(selectedFg)
 			fName := lipgloss.NewStyle().
 				Background(selectedBg).

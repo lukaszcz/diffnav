@@ -14,6 +14,7 @@ import (
 	zone "github.com/lrstanley/bubblezone/v2"
 
 	"github.com/dlvhdr/diffnav/pkg/config"
+	"github.com/dlvhdr/diffnav/pkg/ui/common"
 )
 
 func TestSearchUpdateEnterWithNoResultsDoesNotPanic(t *testing.T) {
@@ -73,6 +74,24 @@ func TestSearchResultsRenderWhenFileTreeIsHidden(t *testing.T) {
 	view := m.View().Content
 	if !strings.Contains(view, "yarn.lock") {
 		t.Fatal("expected search results to be visible even when the file tree is hidden")
+	}
+}
+
+func TestSearchResultPaletteAdaptsToLightBackground(t *testing.T) {
+	m := newTestMainModel(t)
+	isDark := false
+	m.isDarkBackground = &isDark
+
+	palette := m.searchResultPalette()
+
+	if palette.iconDark {
+		t.Fatal("expected light background icon palette")
+	}
+	if got := common.LipglossColorToHex(palette.fileColor); got != "#334155" {
+		t.Fatalf("expected dark file text color in light mode, got %s", got)
+	}
+	if got := common.LipglossColorToHex(palette.dirColor); got != "#64748b" {
+		t.Fatalf("expected dark directory text color in light mode, got %s", got)
 	}
 }
 
