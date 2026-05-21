@@ -12,7 +12,7 @@ import (
 	"github.com/dlvhdr/diffnav/pkg/filenode"
 )
 
-func TestClickDirectorySelectsAndOpensOnlyClickedDirectory(t *testing.T) {
+func TestClickDirectoryRowSelectsOnly(t *testing.T) {
 	m := newTestTreeModel([]string{
 		"app/main.go",
 		"app/internal/db.go",
@@ -30,15 +30,15 @@ func TestClickDirectorySelectsAndOpensOnlyClickedDirectory(t *testing.T) {
 	if got := m.CurrNodePath(); got != "app" {
 		t.Fatalf("expected clicked directory to be selected, got %q", got)
 	}
-	if !app.IsOpen() {
-		t.Fatal("expected folded clicked directory to open")
+	if app.IsOpen() {
+		t.Fatal("expected folded directory row click to leave it folded")
 	}
 	if internal.IsOpen() {
 		t.Fatal("expected folded child directory to remain folded")
 	}
 }
 
-func TestClickSelectedDirectoryTogglesOpenState(t *testing.T) {
+func TestClickDirectoryIconSelectsAndTogglesOpenState(t *testing.T) {
 	m := newTestTreeModel([]string{
 		"app/main.go",
 		"app/internal/db.go",
@@ -50,18 +50,18 @@ func TestClickSelectedDirectoryTogglesOpenState(t *testing.T) {
 	if !app.IsOpen() {
 		t.Fatal("setup: expected app directory to start open")
 	}
-	m.ClickNode(app)
+	m.ClickNodeIcon(app)
 	if app.IsOpen() {
-		t.Fatal("expected selected open directory click to close it")
+		t.Fatal("expected selected open directory icon click to close it")
 	}
 
-	m.ClickNode(app)
+	m.ClickNodeIcon(app)
 	if !app.IsOpen() {
-		t.Fatal("expected selected folded directory click to open it")
+		t.Fatal("expected selected folded directory icon click to open it")
 	}
 }
 
-func TestClickUnselectedOpenDirectoryDoesNotCloseIt(t *testing.T) {
+func TestClickDirectoryIconSelectsAndTogglesUnselectedDirectory(t *testing.T) {
 	m := newTestTreeModel([]string{
 		"app/main.go",
 		"docs/readme.md",
@@ -70,13 +70,55 @@ func TestClickUnselectedOpenDirectoryDoesNotCloseIt(t *testing.T) {
 	docs := nodeByPath(t, &m, "docs")
 	m.SetCursorNoScroll(docs.YOffset())
 
-	m.ClickNode(app)
+	m.ClickNodeIcon(app)
 
 	if got := m.CurrNodePath(); got != "app" {
 		t.Fatalf("expected clicked directory to be selected, got %q", got)
 	}
-	if !app.IsOpen() {
-		t.Fatal("expected unselected open directory click to leave it open")
+	if app.IsOpen() {
+		t.Fatal("expected unselected open directory icon click to close it")
+	}
+}
+
+func TestDirectoryIconHitUsesTreeRelativeColumn(t *testing.T) {
+	m := newTestTreeModel([]string{
+		"app/main.go",
+		"app/internal/db.go",
+		"docs/readme.md",
+	})
+	root := m.GetNodeAtY(0)
+	app := nodeByPath(t, &m, "app")
+	internal := nodeByPath(t, &m, "app/internal")
+
+	for _, tc := range []struct {
+		name string
+		node *tree.Node
+		x    int
+	}{
+		{name: "root icon", node: root, x: 0},
+		{name: "depth one icon", node: app, x: 1},
+		{name: "depth two icon", node: internal, x: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !m.IsDirectoryIconHit(tc.node, tc.x) {
+				t.Fatalf("expected x=%d to hit %s", tc.x, tc.name)
+			}
+			if m.IsDirectoryIconHit(tc.node, tc.x-1) {
+				t.Fatalf("expected x=%d to miss before %s", tc.x-1, tc.name)
+			}
+			if m.IsDirectoryIconHit(tc.node, tc.x+1) {
+				t.Fatalf("expected x=%d to miss after %s", tc.x+1, tc.name)
+			}
+		})
+	}
+}
+
+func TestDirectoryIconHitIgnoresFileNodes(t *testing.T) {
+	m := newTestTreeModel([]string{"app/main.go"})
+	file := nodeByPath(t, &m, "app/main.go")
+
+	if m.IsDirectoryIconHit(file, file.Depth()) {
+		t.Fatal("expected file node icon column to not be a directory toggle hit")
 	}
 }
 

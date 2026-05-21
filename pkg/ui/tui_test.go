@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image/color"
 	"os"
 	"os/exec"
@@ -455,6 +456,123 @@ func TestEnterOnDirectoryStillToggles(t *testing.T) {
 			"expected dir open state to toggle from %v, got %v",
 			wasOpen,
 			toggled.IsOpen(),
+		)
+	}
+}
+
+func TestFileTreeDirectoryRowClickSelectsWithoutToggling(t *testing.T) {
+	for _, tc := range []struct {
+		size       tea.WindowSizeMsg
+		hideHeader bool
+	}{
+		{size: tea.WindowSizeMsg{Width: 100, Height: 30}},
+		{size: tea.WindowSizeMsg{Width: 150, Height: 42}},
+		{size: tea.WindowSizeMsg{Width: 120, Height: 34}, hideHeader: true},
+	} {
+		t.Run(
+			fmt.Sprintf("%dx%d/header=%v", tc.size.Width, tc.size.Height, !tc.hideHeader),
+			func(t *testing.T) {
+				m := newTestMainModel(t)
+				m.config.UI.HideHeader = tc.hideHeader
+				m = updateMainModel(t, m, tc.size)
+				m.activePanel = FileTreePanel
+				m.fileTree.SetCursorByPath("graphql-server/tests")
+
+				m = updateMainModel(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+
+				target := m.fileTree.GetCurrNode()
+				if target == nil {
+					t.Fatal("expected directory node")
+				}
+				if target.IsOpen() {
+					t.Fatal("setup: expected Enter to fold the selected directory")
+				}
+
+				_ = m.View().Content
+				z := zone.Get(zoneFileTree)
+				localY := target.YOffset() - m.fileTree.ViewportYOffset()
+				nameX := target.Depth() + 4
+
+				updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{
+					X:      z.StartX + nameX,
+					Y:      z.StartY + localY,
+					Button: tea.MouseLeft,
+				}))
+				result, ok := updated.(mainModel)
+				if !ok {
+					t.Fatalf("unexpected model type %T", updated)
+				}
+
+				clicked := result.fileTree.GetCurrNode()
+				if got := result.fileTree.CurrNodePath(); got != "graphql-server/tests" {
+					t.Fatalf("expected clicked directory to be selected, got %q", got)
+				}
+				if clicked.IsOpen() {
+					t.Fatal("expected directory name row click to leave folded state unchanged")
+				}
+			},
+		)
+	}
+}
+
+func TestFileTreeDirectoryIconClickSelectsAndToggles(t *testing.T) {
+	for _, tc := range []struct {
+		size       tea.WindowSizeMsg
+		hideHeader bool
+	}{
+		{size: tea.WindowSizeMsg{Width: 100, Height: 30}},
+		{size: tea.WindowSizeMsg{Width: 150, Height: 42}},
+		{size: tea.WindowSizeMsg{Width: 120, Height: 34}, hideHeader: true},
+	} {
+		t.Run(
+			fmt.Sprintf("%dx%d/header=%v", tc.size.Width, tc.size.Height, !tc.hideHeader),
+			func(t *testing.T) {
+				m := newTestMainModel(t)
+				m.config.UI.HideHeader = tc.hideHeader
+				m = updateMainModel(t, m, tc.size)
+				m.activePanel = FileTreePanel
+				m.fileTree.SetCursorByPath("graphql-server/tests")
+
+				target := m.fileTree.GetCurrNode()
+				if target == nil {
+					t.Fatal("expected directory node")
+				}
+				if !target.IsOpen() {
+					t.Fatal("setup: expected directory to start open")
+				}
+
+				_ = m.View().Content
+				z := zone.Get(zoneFileTree)
+				localY := target.YOffset() - m.fileTree.ViewportYOffset()
+				iconX := -1
+				for x := 0; x < m.fileTree.Width(); x++ {
+					if m.fileTree.IsDirectoryIconHit(target, x) {
+						iconX = x
+						break
+					}
+				}
+				if iconX < 0 {
+					t.Fatal("expected directory icon hit column")
+				}
+
+				updated, _ := m.handleMouse(tea.MouseClickMsg(tea.Mouse{
+					X:      z.StartX + iconX,
+					Y:      z.StartY + localY,
+					Button: tea.MouseLeft,
+				}))
+				result, ok := updated.(mainModel)
+				if !ok {
+					t.Fatalf("unexpected model type %T", updated)
+				}
+
+				clicked := result.fileTree.GetCurrNode()
+				if got := result.fileTree.CurrNodePath(); got != "graphql-server/tests" {
+					t.Fatalf("expected clicked directory to be selected, got %q", got)
+				}
+				if clicked.IsOpen() {
+					t.Fatal("expected directory icon click to toggle the directory closed")
+				}
+			},
 		)
 	}
 }

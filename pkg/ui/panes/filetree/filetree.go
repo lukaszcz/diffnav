@@ -486,27 +486,51 @@ func (m *Model) SetCursorNoScroll(cursor int) {
 	m.t.SetViewportYOffset(scroll)
 }
 
-// ClickNode applies mouse-click behavior to a visible tree node.
+// ClickNode applies row-click behavior to a visible tree node.
 func (m *Model) ClickNode(node *tree.Node) {
 	if len(m.files) == 0 || node == nil {
 		return
 	}
 
-	current := m.t.NodeAtCurrentOffset()
-	wasSelected := current != nil && current.YOffset() == node.YOffset()
-	wasOpen := node.IsOpen()
 	scroll := m.t.ViewportYOffset()
+	m.t.SetYOffset(node.YOffset())
+	m.t.SetViewportYOffset(scroll)
+}
 
+// ClickNodeIcon applies directory-icon click behavior to a visible tree node.
+func (m *Model) ClickNodeIcon(node *tree.Node) {
+	if len(m.files) == 0 || node == nil {
+		return
+	}
+
+	scroll := m.t.ViewportYOffset()
 	m.t.SetYOffset(node.YOffset())
 	if isDirectoryNode(node) {
-		switch {
-		case !wasOpen:
-			m.t.OpenCurrentNode()
-		case wasSelected:
-			m.t.CloseCurrentNode()
-		}
+		m.t.ToggleCurrentNode()
 	}
 	m.t.SetViewportYOffset(scroll)
+}
+
+// IsDirectoryIconHit reports whether x, relative to the left edge of the file
+// tree, lands on the visible directory disclosure icon for node.
+func (m *Model) IsDirectoryIconHit(node *tree.Node, x int) bool {
+	if node == nil || x < 0 || !isDirectoryNode(node) {
+		return false
+	}
+
+	start := directoryIconStartColumn(node)
+	open, closed := getDirIcons(m.cfg.UI.Icons)
+	width := max(lipgloss.Width(open), lipgloss.Width(closed))
+	return x >= start && x < start+width
+}
+
+func directoryIconStartColumn(node *tree.Node) int {
+	if node == nil || node.Depth() == 0 {
+		return 0
+	}
+
+	return lipgloss.Width(indenter(nil, 0))*(node.Depth()-1) +
+		lipgloss.Width(enumerator(nil, 0))
 }
 
 func isDirectoryNode(node *tree.Node) bool {

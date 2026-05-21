@@ -1348,7 +1348,7 @@ func (m mainModel) handleSearchBoxClick() (tea.Model, tea.Cmd) {
 
 func (m mainModel) handleFileTreeClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Use zone-relative coordinates.
-	_, y := zone.Get(zoneFileTree).Pos(msg)
+	x, y := zone.Get(zoneFileTree).Pos(msg)
 	if y < 0 {
 		return m, nil
 	}
@@ -1360,7 +1360,11 @@ func (m mainModel) handleFileTreeClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	m.fileTree.ClickNode(node)
+	if m.fileTree.IsDirectoryIconHit(node, x) {
+		m.fileTree.ClickNodeIcon(node)
+	} else {
+		m.fileTree.ClickNode(node)
+	}
 	node = m.fileTree.GetCurrNode()
 	m, cmd = m.setNodeDiff(node)
 	return m, cmd
