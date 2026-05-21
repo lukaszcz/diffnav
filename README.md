@@ -1,6 +1,6 @@
 <br />
 
-[DiffNav Extra](https://github.com/lukaszcz/diffnav) is a fork of [DiffNav](https://github.com/dlvhdr/diffnav) with extra features and bespoke modifications. See [CHANGES.md](CHANGES.md) for changes with respect to upstream DiffNav.
+[DiffNav Extra](https://github.com/lukaszcz/diffnav-extra) is a fork of [DiffNav](https://github.com/dlvhdr/diffnav) with extra features and bespoke modifications. See [CHANGES.md](CHANGES.md) for changes with respect to upstream DiffNav.
 
 <br />
 <p align="center">
