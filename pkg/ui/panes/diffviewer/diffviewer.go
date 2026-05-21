@@ -33,6 +33,7 @@ type cachedNode struct {
 	additions int64
 	deletions int64
 	diff      string
+	ready     bool
 }
 
 type nodeCache map[string]*cachedNode
@@ -42,6 +43,10 @@ func cacheKey(path string, sideBySide bool) string {
 		return path + ":sbs"
 	}
 	return path
+}
+
+func cacheReady(node *cachedNode) bool {
+	return node != nil && node.ready
 }
 
 type Model struct {
@@ -137,6 +142,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		diff := wrapLongLines(msg.text, m.vp.Width())
 		if _, ok := m.cache[msg.cacheKey]; ok {
 			m.cache[msg.cacheKey].diff = diff
+			m.cache[msg.cacheKey].ready = true
 		}
 		m.vp.SetContent(diff)
 		m.refreshColumnDetection(diff)
@@ -290,7 +296,7 @@ func (m *Model) diff() tea.Cmd {
 
 	if m.file != nil {
 		key := cacheKey(m.file.path, m.sideBySide)
-		if cached, ok := m.cache[key]; ok && cached.diff != "" {
+		if cached, ok := m.cache[key]; ok && cacheReady(cached) {
 			m.file = cached
 			m.vp.SetContent(cached.diff)
 			m.refreshColumnDetection(cached.diff)
@@ -308,7 +314,7 @@ func (m *Model) diff() tea.Cmd {
 		return diffFile(node, m.contentWidth(), m.sideBySide, m.deltaThemeArgs(), m.renderID)
 	} else if m.dir != nil {
 		key := cacheKey(m.dir.path, m.sideBySide)
-		if cached, ok := m.cache[key]; ok && cached.diff != "" {
+		if cached, ok := m.cache[key]; ok && cacheReady(cached) {
 			m.dir = cached
 			m.vp.SetContent(cached.diff)
 			m.refreshColumnDetection(cached.diff)
@@ -390,7 +396,7 @@ func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 
 	fname := filenode.GetFileName(file)
 	key := cacheKey(fname, m.sideBySide)
-	if cached, ok := m.cache[key]; ok {
+	if cached, ok := m.cache[key]; ok && cacheReady(cached) {
 		m.file = cached
 		m.vp.SetContent(cached.diff)
 		m.refreshColumnDetection(cached.diff)
@@ -417,7 +423,7 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 	m.file = nil
 
 	key := cacheKey(dirPath, m.sideBySide)
-	if cached, ok := m.cache[key]; ok {
+	if cached, ok := m.cache[key]; ok && cacheReady(cached) {
 		m.dir = cached
 		m.vp.SetContent(cached.diff)
 		m.refreshColumnDetection(cached.diff)

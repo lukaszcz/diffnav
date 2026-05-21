@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -40,6 +41,46 @@ func TestUpdateAcceptsCurrentDiffContentMsg(t *testing.T) {
 
 	if updated.cache[key].diff != "fresh" {
 		t.Fatalf("expected current render to be applied, got %q", updated.cache[key].diff)
+	}
+}
+
+func TestSetFilePatchRerendersEmptyCachedEntry(t *testing.T) {
+	m := New(false, "dark")
+	m.Common.Width = 120
+	file := &gitdiff.File{NewName: "src/app.go"}
+	key := cacheKey("src/app.go", false)
+	m.cache[key] = &cachedNode{
+		path:  "src/app.go",
+		files: []*gitdiff.File{file},
+	}
+
+	updated, cmd := m.SetFilePatch(file)
+
+	if cmd == nil {
+		t.Fatal("expected empty cached file diff to trigger a new render")
+	}
+	if updated.file == nil || updated.file.path != "src/app.go" {
+		t.Fatalf("expected selected file to be src/app.go, got %#v", updated.file)
+	}
+}
+
+func TestSetDirPatchRerendersEmptyCachedEntry(t *testing.T) {
+	m := New(false, "dark")
+	m.Common.Width = 120
+	file := &gitdiff.File{NewName: "src/app.go"}
+	key := cacheKey("src", false)
+	m.cache[key] = &cachedNode{
+		path:  "src",
+		files: []*gitdiff.File{file},
+	}
+
+	updated, cmd := m.SetDirPatch("src", []*gitdiff.File{file})
+
+	if cmd == nil {
+		t.Fatal("expected empty cached dir diff to trigger a new render")
+	}
+	if updated.dir == nil || updated.dir.path != "src" {
+		t.Fatalf("expected selected dir to be src, got %#v", updated.dir)
 	}
 }
 
