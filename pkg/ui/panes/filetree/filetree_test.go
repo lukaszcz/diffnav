@@ -107,9 +107,32 @@ func TestDirectoryIconHitUsesTreeRelativeColumn(t *testing.T) {
 				t.Fatalf("expected x=%d to miss before %s", tc.x-1, tc.name)
 			}
 			if m.IsDirectoryIconHit(tc.node, tc.x+1) {
-				t.Fatalf("expected x=%d to miss after %s", tc.x+1, tc.name)
+				t.Fatalf("expected x=%d to miss after %s icon", tc.x+1, tc.name)
 			}
 		})
+	}
+}
+
+func TestDirectoryIconHitCoversNerdFontIconWidth(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.UI.Icons = filenode.IconsNerdStatus
+	m := New(cfg)
+	files := []*gitdiff.File{
+		{NewName: "app/main.go"},
+		{NewName: "docs/readme.md"},
+	}
+	m = m.SetFiles(files)
+
+	app := nodeByPath(t, &m, "app")
+	start := directoryIconStartColumn(app)
+
+	for _, x := range []int{start, start + 1} {
+		if !m.IsDirectoryIconHit(app, x) {
+			t.Fatalf("expected x=%d to hit full Nerd Font directory indicator", x)
+		}
+	}
+	if m.IsDirectoryIconHit(app, start+2) {
+		t.Fatalf("expected x=%d to miss after Nerd Font directory indicator", start+2)
 	}
 }
 

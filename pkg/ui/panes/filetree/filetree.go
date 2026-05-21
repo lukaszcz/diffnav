@@ -519,9 +519,24 @@ func (m *Model) IsDirectoryIconHit(node *tree.Node, x int) bool {
 	}
 
 	start := directoryIconStartColumn(node)
-	open, closed := getDirIcons(m.cfg.UI.Icons)
-	width := max(lipgloss.Width(open), lipgloss.Width(closed))
+	width := directoryIndicatorWidth(m.cfg.UI.Icons)
 	return x >= start && x < start+width
+}
+
+func directoryIndicatorWidth(iconStyle string) int {
+	open, closed := getDirIcons(iconStyle)
+	iconWidth := max(lipgloss.Width(open), lipgloss.Width(closed))
+	switch iconStyle {
+	case filenode.IconsNerdStatus,
+		filenode.IconsNerdSimple,
+		filenode.IconsNerdFiletype,
+		filenode.IconsNerdFull:
+		// Private-use Nerd Font folder icons commonly occupy two terminal
+		// cells even when width libraries classify them as one.
+		iconWidth = max(iconWidth, 2)
+	}
+
+	return iconWidth
 }
 
 func directoryIconStartColumn(node *tree.Node) int {
